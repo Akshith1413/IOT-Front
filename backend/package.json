@@ -1,0 +1,12 @@
+{
+    "name": "iot-ecg-backend",
+    "version": "1.0.0",
+    "description": "Vercel Serverless Functions for IOT ECG",
+    "main": "api/index.js",
+    "dependencies": {
+        "firebase-admin": "^11.8.0"
+    },
+    "engines": {
+        "node": "20.x"
+    }
+}

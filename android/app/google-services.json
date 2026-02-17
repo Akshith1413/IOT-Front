@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "289468070185",
+    "project_id": "iot-front-28748",
+    "storage_bucket": "iot-front-28748.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:289468070185:android:5e36495043e04df87b1f38",
+        "android_client_info": {
+          "package_name": "com.example.iot_front"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD0nDmzqsnhPmdm-38bbHo76ZsH8WppuYw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
