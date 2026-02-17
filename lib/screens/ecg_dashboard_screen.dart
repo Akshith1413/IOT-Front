@@ -22,9 +22,11 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
 
   // Animation for live playback
   Timer? _playbackTimer;
+  Timer? _pollTimer; // For live backend polling
   int _visibleEndIndex = 0;
   int _windowSize = 500; // points visible at once
   bool _isPlaying = false;
+  bool _isLive = false;
 
   // Pulse animation
   late AnimationController _pulseController;
@@ -48,11 +50,61 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
   @override
   void dispose() {
     _playbackTimer?.cancel();
+    _pollTimer?.cancel();
     _pulseController.dispose();
     super.dispose();
   }
 
 
+
+  Future<void> _fetchData() async {
+    // Only block if loading initially, not during background polling
+    if (_loading && _session == null) return; 
+    
+    try {
+      final session = await _ecgService.fetchLatestData();
+      if (session != null) {
+        if (mounted) {
+          setState(() {
+            _session = session;
+            if (_isLive) {
+              // Snap to end to show latest data
+              _visibleEndIndex = session.dataPoints.length;
+            }
+             _error = null;
+          });
+        }
+      } else {
+        // Handle empty/null data without breaking the loop
+        if (mounted && _session == null) {
+           setState(() => _error = "Waiting for data stream...");
+        }
+      }
+    } catch (e) {
+      print('Fetch error: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _toggleLive() {
+    setState(() {
+      _isLive = !_isLive;
+    });
+
+    if (_isLive) {
+      _stopPlayback(); 
+       setState(() => _loading = true);
+      _fetchData(); 
+      _pollTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        _fetchData();
+      });
+    } else {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      setState(() => _loading = false);
+    }
+  }
 
   void _loadSampleData() {
     setState(() {
@@ -134,7 +186,7 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
           : _session == null
               ? _buildEmptyState()
               : _buildDashboard(),
-      floatingActionButton: _buildFAB(),
+
     );
   }
 
@@ -165,6 +217,7 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
         ],
       ),
       actions: [
+
         if (_session != null) ...[
           IconButton(
             icon: Icon(
@@ -180,6 +233,14 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
             tooltip: 'Reset',
           ),
         ],
+        IconButton(
+          onPressed: _toggleLive, 
+          icon: Icon(
+            _isLive ? Icons.cloud_sync : Icons.cloud_off, 
+            color: _isLive ? _ecgGreen : _textSecondary
+          ),
+          tooltip: _isLive ? 'Disconnect Live' : 'Connect Live',
+        ),
         IconButton(
           icon: const Icon(Icons.info_outline_rounded, color: _textSecondary),
           onPressed: _showJsonStructureDialog,
@@ -244,6 +305,13 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
               children: [
 
 
+                _buildActionButton(
+                  icon: Icons.cloud_sync_outlined,
+                  label: 'Connect Live',
+                  color: _ecgGreen,
+                  onTap: _toggleLive,
+                ),
+                const SizedBox(width: 16),
                 _buildActionButton(
                   icon: Icons.science_outlined,
                   label: 'Sample Data',
@@ -371,7 +439,7 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: _isPlaying
+              color: _isPlaying || _isLive
                   ? _ecgGreen.withOpacity(0.15)
                   : _textSecondary.withOpacity(0.1),
               borderRadius: BorderRadius.circular(20),
@@ -382,13 +450,13 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
                 Icon(
                   _isPlaying ? Icons.fiber_manual_record : Icons.stop,
                   size: 8,
-                  color: _isPlaying ? _ecgGreen : _textSecondary,
+                  color: _isPlaying || _isLive ? _ecgGreen : _textSecondary,
                 ),
                 const SizedBox(width: 4),
                 Text(
-                  _isPlaying ? 'LIVE' : 'STOPPED',
+                  _isLive ? 'LIVE DATA' : (_isPlaying ? 'PLAYBACK' : 'STOPPED'),
                   style: TextStyle(
-                    color: _isPlaying ? _ecgGreen : _textSecondary,
+                    color: _isPlaying || _isLive ? _ecgGreen : _textSecondary,
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 1,
@@ -1202,16 +1270,5 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
   }
 
   // ---------- FAB ----------
-  Widget? _buildFAB() {
-    return FloatingActionButton.extended(
-      onPressed: _loadCsv,
-      backgroundColor: _ecgGreen,
-      foregroundColor: _bg,
-      icon: const Icon(Icons.file_upload_rounded),
-      label: const Text(
-        'Import CSV',
-        style: TextStyle(fontWeight: FontWeight.w700),
-      ),
-    );
-  }
+
 }

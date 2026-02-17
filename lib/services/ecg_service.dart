@@ -5,7 +5,38 @@ import 'dart:math';
 import 'package:csv/csv.dart';
 import '../models/ecg_data.dart';
 
+import 'package:http/http.dart' as http;
+
 class EcgService {
+  static const String _baseUrl = 'https://iot-ecg-backend.vercel.app/api';
+
+  /// Fetch the latest 300 ECG data points from the backend
+  Future<EcgSession?> fetchLatestData() async {
+    try {
+      final response = await http.get(Uri.parse('$_baseUrl/getLatestEcg'));
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body);
+        if (json['success'] == true && json['data'] != null) {
+          final List<dynamic> data = json['data'];
+          final dataPoints = data.map((d) => EcgDataPoint.fromJson(d)).toList();
+          if (dataPoints.isEmpty) return null;
+          
+          // Sort by timestamp just in case
+          dataPoints.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+          
+          return EcgSession(dataPoints: dataPoints);
+        }
+      } else {
+        print('Server error: ${response.statusCode}');
+      }
+      return null;
+    } catch (e) {
+      print('Error fetching data: $e');
+      return null;
+    }
+  }
+
 
 
   /// Parse ECG data from a CSV string
