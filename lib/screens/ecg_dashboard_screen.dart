@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 import '../models/ecg_data.dart';
 import '../services/ecg_service.dart';
 
@@ -1199,6 +1201,36 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
         ],
       ),
     );
+  }
+
+  Future<void> _loadCsv() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv', 'txt'],
+        withData: true,
+      );
+
+      if (result != null) {
+        final bytes = result.files.first.bytes;
+        if (bytes != null) {
+          final content = utf8.decode(bytes);
+          final session = _ecgService.parseFromCsvString(content);
+          if (session != null) {
+            setState(() {
+              _session = session;
+              _visibleEndIndex = min(_windowSize, session.dataPoints.length);
+              _error = null;
+            });
+            _startPlayback();
+          } else {
+             setState(() => _error = 'Failed to parse CSV');
+          }
+        }
+      }
+    } catch (e) {
+      setState(() => _error = 'Error loading CSV: \$e');
+    }
   }
 
   // ---------- FAB ----------

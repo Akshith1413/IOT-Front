@@ -5,13 +5,14 @@ import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'services/auth_service.dart';
+import 'providers/ecg_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (kIsWeb) {
+  if (kIsWeb || defaultTargetPlatform == TargetPlatform.macOS) {
     await Firebase.initializeApp(
       options: const FirebaseOptions(
         apiKey: "AIzaSyAMpnuMnZ7Zh3UB4kegpoVizfyCkO-CS0k",
@@ -39,6 +40,7 @@ class MyApp extends StatelessWidget {
         Provider<AuthService>(
           create: (_) => AuthService(),
         ),
+        ChangeNotifierProvider(create: (_) => EcgProvider()),
         StreamProvider<User?>(
           create: (context) => context.read<AuthService>().user,
           initialData: null,

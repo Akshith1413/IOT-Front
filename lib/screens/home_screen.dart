@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../services/auth_service.dart';
 import 'ecg_dashboard_screen.dart';
+import 'ecg_monitor_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -64,7 +65,7 @@ class HomeScreen extends StatelessWidget {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => const EcgDashboardScreen(),
+                    builder: (_) => const EcgMonitorScreen(),
                   ),
                 );
               },
