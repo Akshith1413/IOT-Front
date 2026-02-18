@@ -109,14 +109,36 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
 
               const SizedBox(height: 16),
 
-              // ── Peak counter + disconnect button ─────────────────────────
+              // ── Peak counter + recording + disconnect ────────────────────
               Row(
                 children: [
                   _InfoChip(
                     icon: Icons.bolt_rounded,
-                    label: "Peaks detected: ${ecg.peakCount}",
+                    label: "Peaks: ${ecg.peakCount}",
                     color: const Color(0xFFFFAA00),
                   ),
+                  const SizedBox(width: 8),
+                  if (ecg.bleState == BleConnectionState.connected)
+                    GestureDetector(
+                      onTap: () {
+                        if (ecg.isRecording) {
+                          ecg.stopSdRecording();
+                        } else {
+                          _showRecordDialog(context, ecg);
+                        }
+                      },
+                      child: _InfoChip(
+                        icon: ecg.isRecording
+                            ? Icons.stop_circle_rounded
+                            : Icons.fiber_manual_record_rounded,
+                        label: ecg.isRecording
+                            ? "Stop (${ecg.recordingFilename})"
+                            : "Record",
+                        color: ecg.isRecording
+                            ? const Color(0xFFFF4466)
+                            : const Color(0xFF00AAFF),
+                      ),
+                    ),
                   const Spacer(),
                   if (ecg.bleState == BleConnectionState.connected)
                     GestureDetector(
@@ -132,6 +154,67 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // ── Record Dialog ─────────────────────────────────────────────────────
+  void _showRecordDialog(BuildContext context, EcgProvider ecg) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1F2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Record ECG to SD Card",
+          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("Enter a name for the recording file. It will be saved as a CSV on the SD card.",
+              style: TextStyle(color: Colors.grey[400], fontSize: 13)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              maxLength: 8,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: "e.g. test1",
+                hintStyle: TextStyle(color: Colors.grey[600]),
+                suffixText: ".csv",
+                suffixStyle: TextStyle(color: Colors.grey[500]),
+                filled: true,
+                fillColor: const Color(0xFF0F1520),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+                counterStyle: TextStyle(color: Colors.grey[600]),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text("Cancel", style: TextStyle(color: Colors.grey[500])),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.fiber_manual_record_rounded, size: 14),
+            label: const Text("Start Recording"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF4466),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isEmpty) return;
+              ecg.startSdRecording(name);
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
       ),
     );
   }

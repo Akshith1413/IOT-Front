@@ -13,7 +13,8 @@ const String _kDeviceName      = "ECG_Nano33";
 const String _kServiceUuid     = "12345678-1234-1234-1234-123456789ABC";
 const String _kEcgCharUuid     = "12345678-1234-1234-1234-123456789ABD";
 const String _kStatusCharUuid  = "12345678-1234-1234-1234-123456789ABE";
-const String _kBackendUrl      = "https://iot-ecg-backend.vercel.app/api/submitEcgData";
+const String _kCommandCharUuid = "12345678-1234-1234-1234-123456789ABF";
+const String _kBackendUrl      = "http://localhost:3000/api/submitEcgData";
 const int    _kMaxChartPoints  = 512; // ~4 sec with interpolation (4 points per poll)
 const int    _kHrvWindowSize   = 60;  // last N R-R intervals for HRV
 
@@ -21,6 +22,7 @@ class EcgProvider extends ChangeNotifier {
   // ── BLE state ──────────────────────────────────────────────────────────
   BluetoothDevice? _device;
   BluetoothCharacteristic? _ecgChar;
+  BluetoothCharacteristic? _commandChar;
   StreamSubscription<List<int>>? _notifySub;
   StreamSubscription<BluetoothConnectionState>? _connStateSub;
   StreamSubscription<List<ScanResult>>? _scanSub;
@@ -38,6 +40,10 @@ class EcgProvider extends ChangeNotifier {
   double rmssd      = 0.0;
   String bpmStatus  = "—";   // "Normal" | "Tachycardia" | "Bradycardia"
   int    peakCount  = 0;
+
+  // ── SD Recording state ─────────────────────────────────────────────────
+  bool   isRecording     = false;
+  String recordingFilename = "";
 
   // ── R-R interval tracking for HRV ──────────────────────────────────────
   DateTime? _lastPeakTime;
@@ -182,22 +188,28 @@ class EcgProvider extends ChangeNotifier {
           if (char.uuid.toString().toUpperCase() ==
               _kEcgCharUuid.toUpperCase()) {
             _ecgChar = char;
-            bleStatusMessage = "Char found! Setting up...";
+          }
+          if (char.uuid.toString().toUpperCase() ==
+              _kCommandCharUuid.toUpperCase()) {
+            _commandChar = char;
+            debugPrint("Command characteristic found!");
+          }
+        }
+
+        if (_ecgChar != null) {
+            bleStatusMessage = "Chars found! Setting up...";
             notifyListeners();
 
             // ── Step 1: Set up the data listener FIRST ─────────────────
             _notifySub?.cancel();
-            _notifySub = char.onValueReceived.listen(_onEcgData);
+            _notifySub = _ecgChar!.onValueReceived.listen(_onEcgData);
 
             // ── Step 2: Try to enable notifications ────────────────────
-            // On Web Bluetooth, setNotifyValue often times out due to
-            // flutter_blue_plus Web implementation limitations.
-            // We treat this as non-fatal and fall back to polling.
             bool notificationsWorking = false;
             try {
               bleStatusMessage = "Enabling notifications...";
               notifyListeners();
-              await char.setNotifyValue(true)
+              await _ecgChar!.setNotifyValue(true)
                   .timeout(const Duration(seconds: 8));
               notificationsWorking = true;
               bleStatusMessage = "Notifications enabled!";
@@ -215,10 +227,9 @@ class EcgProvider extends ChangeNotifier {
 
             // ── Step 4: If notifications didn't work, start polling ────
             if (!notificationsWorking) {
-              _startPolling(char);
+              _startPolling(_ecgChar!);
             }
             return;
-          }
         }
       }
     }
@@ -385,12 +396,45 @@ class EcgProvider extends ChangeNotifier {
     }
   }
 
+  // ── SD Recording control ────────────────────────────────────────────────
+
+  Future<void> startSdRecording(String filename) async {
+    if (_commandChar == null) {
+      debugPrint("Command characteristic not available");
+      return;
+    }
+    final cmd = "START,$filename";
+    try {
+      await _commandChar!.write(utf8.encode(cmd), withoutResponse: true);
+      isRecording = true;
+      recordingFilename = filename;
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Failed to send START command: $e");
+    }
+  }
+
+  Future<void> stopSdRecording() async {
+    if (_commandChar == null) return;
+    try {
+      await _commandChar!.write(utf8.encode("STOP"), withoutResponse: true);
+      isRecording = false;
+      recordingFilename = "";
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Failed to send STOP command: $e");
+    }
+  }
+
   void _handleDisconnect() {
     _notifySub?.cancel();
     _connStateSub?.cancel();
     _polling = false;
     _device = null;
     _ecgChar = null;
+    _commandChar = null;
+    isRecording = false;
+    recordingFilename = "";
     bleState = BleConnectionState.disconnected;
     bleStatusMessage = "Disconnected. Tap to reconnect.";
     notifyListeners();
