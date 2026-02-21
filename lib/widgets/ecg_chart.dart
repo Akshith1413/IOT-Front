@@ -85,51 +85,41 @@ class _EcgPainter extends CustomPainter {
         Offset(0, 0),
         Offset(0, h),
         [
-          const Color(0xFF00FF88).withOpacity(0.18),
-          const Color(0xFF00FF88).withOpacity(0.0),
+          const Color(0xFF00FF9D).withValues(alpha: 0.25),
+          const Color(0xFF00FF9D).withValues(alpha: 0.0),
         ],
       );
     canvas.drawPath(fillPath, fillPaint);
 
+    // ── Draw subtle, vibrant glow effect ──────────────────────────────────
+    final glowPaint = Paint()
+      ..color = const Color(0xFF00FF9D).withValues(alpha: 0.3)
+      ..strokeWidth = 8
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6)
+      ..isAntiAlias = true;
+    canvas.drawPath(path, glowPaint);
+
     // ── Draw the main ECG line ────────────────────────────────────────────
     final linePaint = Paint()
-      ..color = const Color(0xFF00FF88)
-      ..strokeWidth = 2.2
+      ..color = const Color(0xFF00FF9D) // Cyber Green
+      ..strokeWidth = 2.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..isAntiAlias = true;
     canvas.drawPath(path, linePaint);
 
-    // ── Draw subtle glow effect ───────────────────────────────────────────
-    final glowPaint = Paint()
-      ..color = const Color(0xFF00FF88).withOpacity(0.15)
-      ..strokeWidth = 6
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4)
-      ..isAntiAlias = true;
-    canvas.drawPath(path, glowPaint);
-
-    // ── Draw R-peak markers ───────────────────────────────────────────────
-    if (peaks.isNotEmpty) {
-      final dotPaint = Paint()..color = const Color(0xFFFF4466);
-      final dotBorder = Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5;
-      for (final p in peaks) {
-        canvas.drawCircle(p, 4, dotPaint);
-        canvas.drawCircle(p, 4, dotBorder);
-      }
-    }
+    // ── R-peak markers removed per requirements ───────────────────────────
   }
 
   /// Draws a subtle background grid
   void _drawGrid(Canvas canvas, Size size, double minY, double maxY) {
+    // Dashed-effect grid or ultra-subtle styling
     final gridPaint = Paint()
-      ..color = Colors.white.withOpacity(0.06)
-      ..strokeWidth = 0.5;
+      ..color = const Color(0xFF00D4FF).withValues(alpha: 0.04) // Subtle Electric Blue grid
+      ..strokeWidth = 1.0;
 
     // Horizontal lines (4 divisions)
     for (int i = 1; i < 4; i++) {

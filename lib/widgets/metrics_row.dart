@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/ecg_provider.dart';
@@ -14,14 +15,10 @@ class MetricsRow extends StatelessWidget {
         _MetricCard(
           label: "BPM",
           value: ecg.bpm > 0 ? "${ecg.bpm}" : "—",
-          subLabel: ecg.bpmStatus,
-          subColor: ecg.bpmStatus == "Normal"
-              ? const Color(0xFF00FF88)
-              : ecg.bpmStatus == "Tachycardia"
-                  ? const Color(0xFFFF4466)
-                  : const Color(0xFFFFAA00),
+          subLabel: "Heart Rate",
+          subColor: const Color(0xFF888888),
           icon: Icons.favorite_rounded,
-          iconColor: const Color(0xFFFF4466),
+          iconColor: const Color(0xFFFF2A6D), // Neon Pink
         ),
         const SizedBox(width: 12),
         _MetricCard(
@@ -30,7 +27,7 @@ class MetricsRow extends StatelessWidget {
           subLabel: "HRV metric",
           subColor: const Color(0xFF888888),
           icon: Icons.show_chart,
-          iconColor: const Color(0xFF5599FF),
+          iconColor: const Color(0xFF00D4FF), // Electric Blue
         ),
         const SizedBox(width: 12),
         _MetricCard(
@@ -39,7 +36,7 @@ class MetricsRow extends StatelessWidget {
           subLabel: "HRV metric",
           subColor: const Color(0xFF888888),
           icon: Icons.timeline,
-          iconColor: const Color(0xFFAA55FF),
+          iconColor: const Color(0xFFB388FF), // Cyber Purple
         ),
       ],
     );
@@ -66,48 +63,71 @@ class _MetricCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withOpacity(0.08)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+          child: Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: iconColor.withValues(alpha: 0.3),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: iconColor.withValues(alpha: 0.1),
+                  blurRadius: 20,
+                  spreadRadius: -5,
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(icon, size: 14, color: iconColor),
-                const SizedBox(width: 6),
-                Text(label,
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: iconColor.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(icon, size: 16, color: iconColor),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(label,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFFB0B0B0),
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(value,
                   style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(subLabel,
+                  style: TextStyle(
                     fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF888888),
-                    letterSpacing: 1.2,
+                    fontWeight: FontWeight.w600,
+                    color: subColor,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            Text(value,
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: Colors.white,
-                fontFeatures: [FontFeature.tabularFigures()],
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(subLabel,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                color: subColor,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

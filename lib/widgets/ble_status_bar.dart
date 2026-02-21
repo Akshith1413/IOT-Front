@@ -21,9 +21,16 @@ class BleStatusBar extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
-            color: _bgColor(ecg.bleState).withOpacity(0.15),
+            color: _bgColor(ecg.bleState).withValues(alpha: 0.15),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _bgColor(ecg.bleState).withOpacity(0.4)),
+            border: Border.all(color: _bgColor(ecg.bleState).withValues(alpha: 0.4), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: _bgColor(ecg.bleState).withValues(alpha: 0.2),
+                blurRadius: 12,
+                spreadRadius: -2,
+              )
+            ]
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -33,7 +40,7 @@ class BleStatusBar extends StatelessWidget {
                 Container(
                   width: 8, height: 8,
                   decoration: const BoxDecoration(
-                    color: Color(0xFF00FF88),
+                    color: Color(0xFF00FF9D),
                     shape: BoxShape.circle,
                   ),
                 ).animate(onPlay: (c) => c.repeat())
@@ -68,10 +75,10 @@ class BleStatusBar extends StatelessWidget {
 
   Color _bgColor(BleConnectionState state) {
     switch (state) {
-      case BleConnectionState.connected:   return const Color(0xFF00FF88);
+      case BleConnectionState.connected:   return const Color(0xFF00FF9D); // Cyber Green
       case BleConnectionState.scanning:
-      case BleConnectionState.connecting:  return const Color(0xFFFFAA00);
-      case BleConnectionState.error:       return const Color(0xFFFF4466);
+      case BleConnectionState.connecting:  return const Color(0xFFFFAA00); // Yellow/Orange
+      case BleConnectionState.error:       return const Color(0xFFFF2A6D); // Neon Pink
       case BleConnectionState.disconnected:return const Color(0xFF888888);
     }
   }

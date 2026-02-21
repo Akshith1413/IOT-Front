@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -33,26 +34,60 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
     final ecg = context.watch<EcgProvider>();
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0D14),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── Header ─────────────────────────────────────────────────
+      backgroundColor: Colors.black, // Fallback
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(-0.5, -0.8),
+            radius: 1.5,
+            colors: [
+              Color(0xFF141933), // Deep Indigo
+              Color(0xFF07090F), // True Black edge
+            ],
+            stops: [0.0, 1.0],
+          ),
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Header ─────────────────────────────────────────────────
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  Row(
                     children: [
-                      const Text("ECG Monitor",
+                      Padding(
+                        padding: const EdgeInsets.only(right: 12.0),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.05),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                          ),
+                          child: IconButton(
+                            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text("ECG Monitor",
                         style: TextStyle(
-                          fontSize: 26,
+                          fontSize: 28,
                           fontWeight: FontWeight.w900,
                           color: Colors.white,
                           letterSpacing: -0.5,
+                          shadows: [
+                            Shadow(
+                              color: Color(0xFF00FF9D),
+                              blurRadius: 12,
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 2),
@@ -65,6 +100,8 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
                       ),
                     ],
                   ),
+                  ],
+                  ),
                   const BleStatusBar(),
                 ],
               ),
@@ -74,28 +111,35 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
               // ── ECG Chart ───────────────────────────────────────────────
               Expanded(
                 flex: 5,
-                child: Container(
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0F1520),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: ecg.bleState == BleConnectionState.connected
-                          ? const Color(0xFF00FF88).withOpacity(0.2)
-                          : Colors.white.withOpacity(0.06),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(24),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                    child: Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.03),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(
+                          color: ecg.bleState == BleConnectionState.connected
+                              ? const Color(0xFF00FF9D).withValues(alpha: 0.3)
+                              : Colors.white.withValues(alpha: 0.1),
+                          width: 1.5,
+                        ),
+                        boxShadow: ecg.bleState == BleConnectionState.connected
+                            ? [BoxShadow(
+                                color: const Color(0xFF00FF9D).withValues(alpha: 0.15),
+                                blurRadius: 40,
+                                spreadRadius: -10,
+                              )]
+                            : [],
+                      ),
+                      padding: const EdgeInsets.all(16),
+                      child: ecg.chartBuffer.isEmpty
+                          ? _buildPlaceholder(ecg.bleState)
+                          : EcgChart(buffer: ecg.chartBuffer),
                     ),
-                    boxShadow: ecg.bleState == BleConnectionState.connected
-                        ? [BoxShadow(
-                            color: const Color(0xFF00FF88).withOpacity(0.08),
-                            blurRadius: 24,
-                            spreadRadius: 2,
-                          )]
-                        : [],
                   ),
-                  padding: const EdgeInsets.all(16),
-                  child: ecg.chartBuffer.isEmpty
-                      ? _buildPlaceholder(ecg.bleState)
-                      : EcgChart(buffer: ecg.chartBuffer),
                 ),
               ),
 
@@ -135,8 +179,8 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
                             ? "Stop (${ecg.recordingFilename})"
                             : "Record",
                         color: ecg.isRecording
-                            ? const Color(0xFFFF4466)
-                            : const Color(0xFF00AAFF),
+                            ? const Color(0xFFFF2A6D)
+                            : const Color(0xFF00D4FF),
                       ),
                     ),
                   const Spacer(),
@@ -146,7 +190,7 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
                       child: const _InfoChip(
                         icon: Icons.bluetooth_disabled,
                         label: "Disconnect",
-                        color: Color(0xFFFF4466),
+                        color: Color(0xFFFF2A6D),
                       ),
                     ),
                 ],
@@ -154,6 +198,7 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -225,7 +270,7 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircularProgressIndicator(color: Color(0xFF00FF88), strokeWidth: 2),
+            CircularProgressIndicator(color: Color(0xFF00FF9D), strokeWidth: 3),
             SizedBox(height: 16),
             Text("Waiting for ECG data...",
               style: TextStyle(color: Color(0xFF888888), fontSize: 14)),
@@ -237,9 +282,9 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.bluetooth_searching,
+          Icon(Icons.monitor_heart_outlined,
             size: 48,
-            color: Colors.white.withOpacity(0.1)),
+            color: Colors.white.withValues(alpha: 0.1)),
           const SizedBox(height: 16),
           Text(
             state == BleConnectionState.scanning
@@ -266,11 +311,18 @@ class _InfoChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.3)),
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.4), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.2),
+            blurRadius: 10,
+            spreadRadius: -2,
+          ),
+        ]
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

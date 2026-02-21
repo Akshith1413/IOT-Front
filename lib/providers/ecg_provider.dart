@@ -38,7 +38,6 @@ class EcgProvider extends ChangeNotifier {
   int    bpm        = 0;
   double sdnn       = 0.0;
   double rmssd      = 0.0;
-  String bpmStatus  = "—";   // "Normal" | "Tachycardia" | "Bradycardia"
   int    peakCount  = 0;
 
   // ── SD Recording state ─────────────────────────────────────────────────
@@ -351,9 +350,6 @@ class EcgProvider extends ChangeNotifier {
 
     // BPM from latest R-R
     bpm = (60000 / latestRrMs).round().clamp(20, 250);
-    bpmStatus = bpm > 100 ? "Tachycardia"
-              : bpm < 60  ? "Bradycardia"
-                           : "Normal";
 
     if (_rrIntervals.length < 2) return;
 
