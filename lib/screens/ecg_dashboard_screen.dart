@@ -1,10 +1,15 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'dart:convert';
+import 'package:file_picker/file_picker.dart';
 import '../models/ecg_data.dart';
 import '../services/ecg_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/particle_background.dart';
 
 class EcgDashboardScreen extends StatefulWidget {
   const EcgDashboardScreen({super.key});
@@ -162,31 +167,38 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
     });
   }
 
-  // ---------- COLORS & THEME ----------
-  static const _bg = Color(0xFF0A0E21);
-  static const _cardBg = Color(0xFF1C1F2E);
-  static const _cardBorder = Color(0xFF2A2D3E);
-  static const _ecgGreen = Color(0xFF00E676);
-  static const _heartRed = Color(0xFFFF5252);
-  static const _hrvBlue = Color(0xFF448AFF);
-  static const _rrOrange = Color(0xFFFFAB40);
-  static const _accentPurple = Color(0xFFB388FF);
-  static const _textPrimary = Color(0xFFE0E0E0);
-  static const _textSecondary = Color(0xFF9E9E9E);
+  // ---------- COLORS & THEME (Aurora Palette) ----------
+  static const _bg = AppColors.deepSpace;
+  static const _cardBg = AppColors.cardBg;
+  static const _cardBorder = AppColors.cardBorder;
+  static const _ecgGreen = AppColors.mintGlow;
+  static const _heartRed = AppColors.stellarRose;
+  static const _hrvBlue = AppColors.iceBlue;
+  static const _rrOrange = AppColors.cosmicGold;
+  static const _accentPurple = AppColors.plasmaViolet;
+  static const _textPrimary = AppColors.textPrimary;
+  static const _textSecondary = AppColors.textSecondary;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
       appBar: _buildAppBar(),
-      body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: _ecgGreen),
-            )
-          : _session == null
-              ? _buildEmptyState()
-              : _buildDashboard(),
-
+      body: ParticleBackground(
+        particleCount: 20,
+        baseColor: AppColors.mintGlow,
+        accentColor: AppColors.plasmaViolet,
+        connectionDistance: 100,
+        opacity: 0.25,
+        child: _loading
+            ? const Center(
+                child: CircularProgressIndicator(color: _ecgGreen),
+              )
+            : _session == null
+                ? _buildEmptyState()
+                : _buildDashboard(),
+      ),
+      floatingActionButton: _buildFAB(),
     );
   }
 
@@ -200,7 +212,7 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
-              color: _ecgGreen.withOpacity(0.15),
+              color: _ecgGreen.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Icon(Icons.monitor_heart, color: _ecgGreen, size: 22),
@@ -260,7 +272,7 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
             Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: _ecgGreen.withOpacity(0.08),
+                color: _ecgGreen.withValues(alpha: 0.08),
                 shape: BoxShape.circle,
               ),
               child: const Icon(
@@ -289,7 +301,7 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: _heartRed.withOpacity(0.1),
+                  color: _heartRed.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
@@ -340,9 +352,9 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.12),
+            color: color.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: color.withOpacity(0.3)),
+            border: Border.all(color: color.withValues(alpha: 0.3)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -440,8 +452,8 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: _isPlaying || _isLive
-                  ? _ecgGreen.withOpacity(0.15)
-                  : _textSecondary.withOpacity(0.1),
+                  ? _ecgGreen.withValues(alpha: 0.15)
+                  : _textSecondary.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Row(
@@ -490,20 +502,24 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
 
   // ---------- ECG WAVEFORM ----------
   Widget _buildEcgWaveformCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _cardBorder),
-        boxShadow: [
-          BoxShadow(
-            color: _ecgGreen.withOpacity(0.05),
-            blurRadius: 20,
-            offset: const Offset(0, 4),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            boxShadow: [
+              BoxShadow(
+                color: _ecgGreen.withValues(alpha: 0.05),
+                blurRadius: 20,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ],
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -543,6 +559,8 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
           ),
         ],
       ),
+      ),
+      ),
     );
   }
 
@@ -569,11 +587,11 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
           horizontalInterval: 0.5,
           verticalInterval: 50,
           getDrawingHorizontalLine: (value) => FlLine(
-            color: _cardBorder.withOpacity(0.5),
+            color: _cardBorder.withValues(alpha: 0.5),
             strokeWidth: 0.5,
           ),
           getDrawingVerticalLine: (value) => FlLine(
-            color: _cardBorder.withOpacity(0.3),
+            color: _cardBorder.withValues(alpha: 0.3),
             strokeWidth: 0.5,
           ),
         ),
@@ -634,8 +652,8 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  _ecgGreen.withOpacity(0.15),
-                  _ecgGreen.withOpacity(0.0),
+                  _ecgGreen.withValues(alpha: 0.15),
+                  _ecgGreen.withValues(alpha: 0.0),
                 ],
               ),
             ),
@@ -710,7 +728,15 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
     required Color color,
     bool isPulsing = false,
   }) {
-    Widget iconWidget = Icon(icon, color: color, size: 28);
+    Widget iconWidget = Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, color: color, size: 24),
+    );
+
     if (isPulsing) {
       iconWidget = AnimatedBuilder(
         animation: _pulseAnimation,
@@ -724,34 +750,39 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
       );
     }
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.2)),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.08),
-            blurRadius: 12,
-            offset: const Offset(0, 3),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: 0.1),
+                blurRadius: 16,
+                spreadRadius: -4,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          iconWidget,
-          const SizedBox(height: 12),
-          Text(
-            label,
-            style: const TextStyle(
-              color: _textSecondary,
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              letterSpacing: 0.5,
-            ),
-          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              iconWidget,
+              const SizedBox(height: 12),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: _textPrimary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                ),
+              ),
           const SizedBox(height: 4),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -770,9 +801,9 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
                 child: Text(
                   unit,
                   style: TextStyle(
-                    color: color.withOpacity(0.7),
+                    color: color.withValues(alpha: 0.8),
                     fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
@@ -780,19 +811,25 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
           ),
         ],
       ),
+      ),
+      ),
     );
   }
 
   // ---------- DERIVED GRAPHS ----------
   Widget _buildDerivedGraphsSection() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _cardBorder),
-      ),
-      child: Column(
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -837,6 +874,8 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
           ),
         ],
       ),
+      ),
+      ),
     );
   }
 
@@ -847,10 +886,10 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          color: selected ? color.withOpacity(0.15) : Colors.transparent,
+          color: selected ? color.withValues(alpha: 0.15) : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: selected ? color.withOpacity(0.4) : _cardBorder,
+            color: selected ? color.withValues(alpha: 0.4) : _cardBorder,
           ),
         ),
         child: Text(
@@ -919,11 +958,11 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
         gridData: FlGridData(
           show: true,
           getDrawingHorizontalLine: (value) => FlLine(
-            color: _cardBorder.withOpacity(0.5),
+            color: _cardBorder.withValues(alpha: 0.5),
             strokeWidth: 0.5,
           ),
           getDrawingVerticalLine: (value) => FlLine(
-            color: _cardBorder.withOpacity(0.3),
+            color: _cardBorder.withValues(alpha: 0.3),
             strokeWidth: 0.5,
           ),
         ),
@@ -986,8 +1025,8 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  chartColor.withOpacity(0.2),
-                  chartColor.withOpacity(0.0),
+                  chartColor.withValues(alpha: 0.2),
+                  chartColor.withValues(alpha: 0.0),
                 ],
               ),
             ),
@@ -1028,14 +1067,18 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
 
   // ---------- FORMULAS CARD ----------
   Widget _buildFormulasCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _cardBorder),
-      ),
-      child: Column(
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -1089,6 +1132,8 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
           ),
         ],
       ),
+      ),
+      ),
     );
   }
 
@@ -1114,14 +1159,14 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.06),
+            color: color.withValues(alpha: 0.06),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color.withOpacity(0.15)),
+            border: Border.all(color: color.withValues(alpha: 0.15)),
           ),
           child: Text(
             formula,
             style: TextStyle(
-              color: color.withOpacity(0.9),
+              color: color.withValues(alpha: 0.9),
               fontSize: 14,
               fontWeight: FontWeight.w600,
               fontFamily: 'monospace',
@@ -1143,14 +1188,18 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
 
   // ---------- JSON STRUCTURE ----------
   Widget _buildJsonStructureCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _cardBg,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _cardBorder),
-      ),
-      child: Theme(
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           tilePadding: EdgeInsets.zero,
@@ -1191,7 +1240,7 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
               child: SelectableText(
                 _jsonSampleText,
                 style: TextStyle(
-                  color: _ecgGreen.withOpacity(0.9),
+                  color: _ecgGreen.withValues(alpha: 0.9),
                   fontSize: 11,
                   fontFamily: 'monospace',
                   height: 1.6,
@@ -1205,6 +1254,8 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
             ),
           ],
         ),
+      ),
+      ),
       ),
     );
   }
@@ -1251,7 +1302,7 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
             child: SelectableText(
               _jsonSampleText,
               style: TextStyle(
-                color: _ecgGreen.withOpacity(0.9),
+                color: _ecgGreen.withValues(alpha: 0.9),
                 fontSize: 11,
                 fontFamily: 'monospace',
                 height: 1.5,
@@ -1267,6 +1318,36 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
         ],
       ),
     );
+  }
+
+  Future<void> _loadCsv() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv', 'txt'],
+        withData: true,
+      );
+
+      if (result != null) {
+        final bytes = result.files.first.bytes;
+        if (bytes != null) {
+          final content = utf8.decode(bytes);
+          final session = _ecgService.parseFromCsvString(content);
+          if (session != null) {
+            setState(() {
+              _session = session;
+              _visibleEndIndex = min(_windowSize, session.dataPoints.length);
+              _error = null;
+            });
+            _startPlayback();
+          } else {
+             setState(() => _error = 'Failed to parse CSV');
+          }
+        }
+      }
+    } catch (e) {
+      setState(() => _error = 'Error loading CSV: \$e');
+    }
   }
 
   // ---------- FAB ----------
