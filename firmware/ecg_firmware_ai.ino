@@ -14,8 +14,8 @@
 //    3 = F  (Fusion)
 //    4 = Q  (Unknown / Unclassifiable)
 //
-//  Model input:  [1, 187, 1]  — 187 sequential ECG samples (one heartbeat)
-//  Model output: [1, 5]       — probability for each class
+//  Model input:  [1, 1, 256]  — 1 channel, 256 samples (one heartbeat at 128 Hz)
+//  Model output: [1, 5]       — logits for each class
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #include <SPI.h>
@@ -30,8 +30,8 @@
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
-// ── Model data (copy model_data.h into this sketch folder) ──────────────
-#include "model_data.h"
+// ── Model data (model_data_32.h — float32 TFLite, const → lives in flash) ──
+#include "model_data_32.h"
 
 // ─── Pin Definitions ─────────────────────────────────────────────────────────
 #define MAX30001_CS_PIN 10
@@ -111,8 +111,8 @@ unsigned long bootEpochMs = 0;
 //  TFLite Micro — Arrhythmia Detection Engine
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Model input size: 187 samples (one heartbeat window from MIT-BIH)
-#define AI_INPUT_SIZE   187
+// Model input size: 256 samples (one heartbeat window, 128 Hz, ~2 seconds)
+#define AI_INPUT_SIZE   256
 // Number of output classes
 #define AI_NUM_CLASSES  5
 
@@ -130,19 +130,13 @@ static const char* AI_CLASS_SHORT[AI_NUM_CLASSES] = {
   "N", "S", "V", "F", "Q"
 };
 
-// Ring buffer to collect 187 samples for inference (heartbeat window)
-float ecgHistoryBuffer[AI_INPUT_SIZE];
-int   ecgHistoryIndex = 0;
-bool  ecgHistoryFull  = false;
-
-// Peak alignment state
-#define AI_PEAK_OFFSET  90   // Wait 90 samples after peak so it is clearly centered
+// Ring buffer to collect 256 samples for inference
 float aiInputBuffer[AI_INPUT_SIZE];
-int   aiSamplesAfterPeak = 0;
-bool  aiWaitingForWindow = false;
+int   aiBufferIndex = 0;
+bool  aiBufferFull  = false;
 
 // How often to run inference (every N heartbeat windows)
-#define AI_INFERENCE_INTERVAL_MS 2000   // at most once every 2 seconds
+#define AI_INFERENCE_INTERVAL_MS 3000   // at most once every 3 seconds
 unsigned long lastInferenceTime = 0;
 
 // Latest AI result
@@ -151,7 +145,7 @@ float lastAiConfidence = 0.0f;
 char  lastAiLabel[16]  = "---";
 
 // TFLite Micro objects
-constexpr int kTensorArenaSize = 64 * 1024;   // 32 KB arena
+constexpr int kTensorArenaSize = 64 * 1024;   // 64 KB arena
 alignas(16) uint8_t tensorArena[kTensorArenaSize];
 
 const tflite::Model* tfModel        = nullptr;
@@ -161,8 +155,8 @@ TfLiteTensor* outputTensor           = nullptr;
 
 // ─── Initialize TFLite Micro ─────────────────────────────────────────────────
 bool initTFLite() {
-  // Load the model from the byte array
-  tfModel = tflite::GetModel(ecg_model_float16_tflite);
+  // Load the model from the byte array (const → stored in flash, not RAM)
+  tfModel = tflite::GetModel(ecg_model_float32_tflite);
   if (tfModel->version() != TFLITE_SCHEMA_VERSION) {
     debugPrint("ERROR: Model schema version mismatch!");
     return false;
@@ -220,7 +214,7 @@ bool initTFLite() {
   return true;
 }
 
-// ─── Run inference on the 187-sample buffer ──────────────────────────────────
+// ─── Run inference on the 256-sample buffer ──────────────────────────────────
 void runInference() {
   if (interpreter == nullptr || inputTensor == nullptr || outputTensor == nullptr) return;
 
@@ -228,32 +222,22 @@ void runInference() {
   if (now - lastInferenceTime < AI_INFERENCE_INTERVAL_MS) return;
   lastInferenceTime = now;
 
-  // ── Normalize the input buffer ────────────────────────────────────────────
-  // Find min/max for min-max normalization to [0,1]
-  float minVal = aiInputBuffer[0], maxVal = aiInputBuffer[0];
-  for (int i = 1; i < AI_INPUT_SIZE; i++) {
-    if (aiInputBuffer[i] < minVal) minVal = aiInputBuffer[i];
-    if (aiInputBuffer[i] > maxVal) maxVal = aiInputBuffer[i];
-  }
-  float range = maxVal - minVal;
-  if (range <= 0.000001f) range = 1.0f;   // avoid division by zero
+  // ── Z-score normalize the input buffer (matches Python training) ──────────
+  // z-score: (x - mean) / (std + 1e-8)
+  float mean = 0.0f;
+  for (int i = 0; i < AI_INPUT_SIZE; i++) mean += aiInputBuffer[i];
+  mean /= (float)AI_INPUT_SIZE;
 
-  // Copy normalized data into the input tensor dynamically based on type
-  if (inputTensor->type == kTfLiteFloat32) {
-    for (int i = 0; i < AI_INPUT_SIZE; i++) {
-      inputTensor->data.f[i] = (aiInputBuffer[i] - minVal) / range;
-    }
-  } else if (inputTensor->type == kTfLiteInt8) {
-    float scale = inputTensor->params.scale;
-    int zp = inputTensor->params.zero_point;
-    if (scale == 0.0f) scale = 1.0f; // Prevent divide by zero
-    for (int i = 0; i < AI_INPUT_SIZE; i++) {
-      float normVal = (aiInputBuffer[i] - minVal) / range;
-      int q = round(normVal / scale) + zp;
-      if (q < -128) q = -128;
-      if (q > 127) q = 127;
-      inputTensor->data.int8[i] = (int8_t)q;
-    }
+  float variance = 0.0f;
+  for (int i = 0; i < AI_INPUT_SIZE; i++) {
+    float diff = aiInputBuffer[i] - mean;
+    variance += diff * diff;
+  }
+  float stddev = sqrtf(variance / (float)AI_INPUT_SIZE) + 1e-8f;
+
+  // Copy z-score normalized data into the input tensor
+  for (int i = 0; i < AI_INPUT_SIZE; i++) {
+    inputTensor->data.f[i] = (aiInputBuffer[i] - mean) / stddev;
   }
 
   // ── Invoke the model ──────────────────────────────────────────────────────
@@ -266,72 +250,40 @@ void runInference() {
     return;
   }
 
-  // ── Read output probabilities (apply Softmax to logits) ───────────────────
+  // ── Read output logits and apply softmax ──────────────────────────────────
   float out_f[AI_NUM_CLASSES];
-  if (outputTensor->type == kTfLiteFloat32) {
-    for (int i = 0; i < AI_NUM_CLASSES; i++) {
-      out_f[i] = outputTensor->data.f[i];
-    }
-  } else if (outputTensor->type == kTfLiteInt8) {
-    float scale = outputTensor->params.scale;
-    int zp = outputTensor->params.zero_point;
-    for (int i = 0; i < AI_NUM_CLASSES; i++) {
-      out_f[i] = (outputTensor->data.int8[i] - zp) * scale;
-    }
-  } else {
-    debugPrint("[AI] Unsupported output tensor type");
-    return;
+  for (int i = 0; i < AI_NUM_CLASSES; i++) {
+    out_f[i] = outputTensor->data.f[i];
+  }
+
+  // Softmax (model outputs raw logits)
+  float maxLogit = out_f[0];
+  for (int i = 1; i < AI_NUM_CLASSES; i++) {
+    if (out_f[i] > maxLogit) maxLogit = out_f[i];
   }
 
   float probs[AI_NUM_CLASSES];
-  
-  // Check if out_f represents logits or already-softmaxed probabilities
-  float sumOut = 0.0f;
+  float sumExp = 0.0f;
   for (int i = 0; i < AI_NUM_CLASSES; i++) {
-    sumOut += out_f[i];
+    probs[i] = exp(out_f[i] - maxLogit);
+    sumExp += probs[i];
+  }
+  if (sumExp <= 0.0f || isnan(sumExp)) sumExp = 1.0f;
+  for (int i = 0; i < AI_NUM_CLASSES; i++) {
+    probs[i] /= sumExp;
+    if (probs[i] > 1.0f) probs[i] = 1.0f;
+    if (probs[i] < 0.0f) probs[i] = 0.0f;
   }
 
-  if (sumOut > 0.9f && sumOut < 1.1f) {
-    // Already Softmaxed (probabilities)
-    for (int i = 0; i < AI_NUM_CLASSES; i++) {
-      probs[i] = out_f[i];
-    }
-  } else {
-    // Logits: apply Softmax
-    float maxLogit = out_f[0];
-    for (int i = 1; i < AI_NUM_CLASSES; i++) {
-      if (out_f[i] > maxLogit) maxLogit = out_f[i];
-    }
-    
-    float sumExp = 0.0f;
-    for (int i = 0; i < AI_NUM_CLASSES; i++) {
-      probs[i] = exp(out_f[i] - maxLogit);
-      sumExp += probs[i];
-    }
-    
-    if (sumExp <= 0.0f || isnan(sumExp)) sumExp = 1.0f; // Guard against NaN
-    
-    for (int i = 0; i < AI_NUM_CLASSES; i++) {
-      probs[i] /= sumExp;
-    }
-  }
-
+  // Find top class
   float maxProb = -1.0f;
   int   maxIdx  = 0;
-
   for (int i = 0; i < AI_NUM_CLASSES; i++) {
-    if (probs[i] > 1.0f) probs[i] = 1.0f; // Safety clamp
-    if (probs[i] < 0.0f) probs[i] = 0.0f; // Safety clamp
-    
     if (probs[i] > maxProb) {
       maxProb = probs[i];
       maxIdx  = i;
     }
   }
-
-  // Double check clamp to 0-1 range to prevent >100% bug
-  if (maxProb > 1.0f) maxProb = 1.0f;
-  if (maxProb < 0.0f) maxProb = 0.0f;
 
   lastAiClass      = maxIdx;
   lastAiConfidence = maxProb;
@@ -365,11 +317,7 @@ void runInference() {
       AI_CLASS_SHORT[maxIdx],
       AI_CLASS_LABELS[maxIdx],
       maxProb,
-      probs[0],
-      probs[1],
-      probs[2],
-      probs[3],
-      probs[4]
+      probs[0], probs[1], probs[2], probs[3], probs[4]
     );
     aiCharacteristic.writeValue(aiJson);
   }
@@ -677,39 +625,20 @@ void loop() {
     int32_t filtered = smoothed - baseline;
 
     // ── Peak detection ────────────────────────────────────────────────────
-    bool wasPeak = peakDetected;
     detectPeak(filtered);
-    bool justDetectedPeak = (!wasPeak && peakDetected);
 
-    // ── Feed AI sliding buffer ────────────────────────────────────────────
-    // Convert to millivolts
+    // ── Feed AI buffer ────────────────────────────────────────────────────
+    // Convert to millivolts (same scale the model was trained on)
     float ecgMvForAI = (float)filtered / 65536.0f;
-    ecgHistoryBuffer[ecgHistoryIndex] = ecgMvForAI;
-    ecgHistoryIndex = (ecgHistoryIndex + 1) % AI_INPUT_SIZE;
-    if (ecgHistoryIndex == 0) ecgHistoryFull = true;
+    aiInputBuffer[aiBufferIndex] = ecgMvForAI;
+    aiBufferIndex++;
 
-    // Trigger AI window collection when peak is detected
-    if (justDetectedPeak && !aiWaitingForWindow) {
-      aiWaitingForWindow = true;
-      aiSamplesAfterPeak = 0;
-    }
+    if (aiBufferIndex >= AI_INPUT_SIZE) {
+      aiBufferFull = true;
+      aiBufferIndex = 0;
 
-    // Collect peak-centered window
-    if (aiWaitingForWindow) {
-      aiSamplesAfterPeak++;
-      if (aiSamplesAfterPeak >= AI_PEAK_OFFSET) {
-        aiWaitingForWindow = false;
-        
-        // Ensure we have at least 187 samples recorded
-        if (ecgHistoryFull) {
-          // Copy chronological data sequence around the peak
-          for (int i = 0; i < AI_INPUT_SIZE; i++) {
-            aiInputBuffer[i] = ecgHistoryBuffer[(ecgHistoryIndex + i) % AI_INPUT_SIZE];
-          }
-          // ── Run AI inference on heartbeat window ──────────────────────────
-          runInference();
-        }
-      }
+      // ── Run AI inference when buffer is full ──────────────────────────
+      runInference();
     }
 
     // ── Serial output ─────────────────────────────────────────────────────
