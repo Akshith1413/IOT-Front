@@ -2,6 +2,7 @@ import 'dart:collection';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../models/ecg_sample.dart';
+import '../theme/app_theme.dart';
 
 /// High-performance ECG waveform using CustomPainter
 /// with Catmull-Rom spline interpolation for hospital-monitor-smooth curves.
@@ -85,15 +86,15 @@ class _EcgPainter extends CustomPainter {
         Offset(0, 0),
         Offset(0, h),
         [
-          const Color(0xFF00FF9D).withValues(alpha: 0.25),
-          const Color(0xFF00FF9D).withValues(alpha: 0.0),
+          AppColors.mintGlow.withValues(alpha: 0.25),
+          AppColors.mintGlow.withValues(alpha: 0.0),
         ],
       );
     canvas.drawPath(fillPath, fillPaint);
 
     // ── Draw subtle, vibrant glow effect ──────────────────────────────────
     final glowPaint = Paint()
-      ..color = const Color(0xFF00FF9D).withValues(alpha: 0.3)
+      ..color = AppColors.mintGlow.withValues(alpha: 0.3)
       ..strokeWidth = 8
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
@@ -103,7 +104,7 @@ class _EcgPainter extends CustomPainter {
 
     // ── Draw the main ECG line ────────────────────────────────────────────
     final linePaint = Paint()
-      ..color = const Color(0xFF00FF9D) // Cyber Green
+      ..color = AppColors.mintGlow
       ..strokeWidth = 2.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
@@ -118,7 +119,7 @@ class _EcgPainter extends CustomPainter {
   void _drawGrid(Canvas canvas, Size size, double minY, double maxY) {
     // Dashed-effect grid or ultra-subtle styling
     final gridPaint = Paint()
-      ..color = const Color(0xFF00D4FF).withValues(alpha: 0.04) // Subtle Electric Blue grid
+      ..color = AppColors.iceBlue.withValues(alpha: 0.04)
       ..strokeWidth = 1.0;
 
     // Horizontal lines (4 divisions)

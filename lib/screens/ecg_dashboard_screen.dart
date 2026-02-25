@@ -8,6 +8,8 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import '../models/ecg_data.dart';
 import '../services/ecg_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/particle_background.dart';
 
 class EcgDashboardScreen extends StatefulWidget {
   const EcgDashboardScreen({super.key});
@@ -113,35 +115,29 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
     });
   }
 
-  // ---------- COLORS & THEME ----------
-  static const _bg = Colors.black;
-  static const _cardBg = Color(0xFF141933);
-  static const _cardBorder = Color(0xFF2A2D3E);
-  static const _ecgGreen = Color(0xFF00FF9D); // Cyber Green
-  static const _heartRed = Color(0xFFFF2A6D); // Neon Pink
-  static const _hrvBlue = Color(0xFF00D4FF);  // Electric Blue
-  static const _rrOrange = Color(0xFFFFAA00); // UI Orange
-  static const _accentPurple = Color(0xFFB388FF); // Cyber Purple
-  static const _textPrimary = Color(0xFFE0E0E0);
-  static const _textSecondary = Color(0xFF9E9E9E);
+  // ---------- COLORS & THEME (Aurora Palette) ----------
+  static const _bg = AppColors.deepSpace;
+  static const _cardBg = AppColors.cardBg;
+  static const _cardBorder = AppColors.cardBorder;
+  static const _ecgGreen = AppColors.mintGlow;
+  static const _heartRed = AppColors.stellarRose;
+  static const _hrvBlue = AppColors.iceBlue;
+  static const _rrOrange = AppColors.cosmicGold;
+  static const _accentPurple = AppColors.plasmaViolet;
+  static const _textPrimary = AppColors.textPrimary;
+  static const _textSecondary = AppColors.textSecondary;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bg, // Fallback
+      backgroundColor: _bg,
       appBar: _buildAppBar(),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(-0.5, -0.8),
-            radius: 1.5,
-            colors: [
-              Color(0xFF141933), // Deep Indigo
-              Color(0xFF07090F), // True Black edge
-            ],
-            stops: [0.0, 1.0],
-          ),
-        ),
+      body: ParticleBackground(
+        particleCount: 20,
+        baseColor: AppColors.mintGlow,
+        accentColor: AppColors.plasmaViolet,
+        connectionDistance: 100,
+        opacity: 0.25,
         child: _loading
             ? const Center(
                 child: CircularProgressIndicator(color: _ecgGreen),

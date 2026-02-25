@@ -14,6 +14,7 @@ const String _kServiceUuid     = "12345678-1234-1234-1234-123456789ABC";
 const String _kEcgCharUuid     = "12345678-1234-1234-1234-123456789ABD";
 const String _kStatusCharUuid  = "12345678-1234-1234-1234-123456789ABE";
 const String _kCommandCharUuid = "12345678-1234-1234-1234-123456789ABF";
+const String _kAiCharUuid      = "12345678-1234-1234-1234-123456789AC0";
 const String _kBackendUrl      = "http://localhost:3000/api/submitEcgData";
 const int    _kMaxChartPoints  = 512; // ~4 sec with interpolation (4 points per poll)
 const int    _kHrvWindowSize   = 60;  // last N R-R intervals for HRV
@@ -23,7 +24,9 @@ class EcgProvider extends ChangeNotifier {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _ecgChar;
   BluetoothCharacteristic? _commandChar;
+  BluetoothCharacteristic? _aiChar;
   StreamSubscription<List<int>>? _notifySub;
+  StreamSubscription<List<int>>? _aiNotifySub;
   StreamSubscription<BluetoothConnectionState>? _connStateSub;
   StreamSubscription<List<ScanResult>>? _scanSub;
 
@@ -39,6 +42,13 @@ class EcgProvider extends ChangeNotifier {
   double sdnn       = 0.0;
   double rmssd      = 0.0;
   int    peakCount  = 0;
+
+  // ── AI Arrhythmia Classification ────────────────────────────────────
+  String aiClass      = '---';     // Short class (N, S, V, F, Q)
+  String aiLabel      = 'Waiting'; // Full label (Normal, Ventricular, etc.)
+  double aiConfidence = 0.0;       // 0.0 – 1.0
+  List<double> aiProbs = [0, 0, 0, 0, 0]; // Per-class probabilities
+  bool   aiAvailable  = false;     // True once first AI result arrives
 
   // ── SD Recording state ─────────────────────────────────────────────────
   bool   isRecording     = false;
@@ -193,6 +203,11 @@ class EcgProvider extends ChangeNotifier {
             _commandChar = char;
             debugPrint("Command characteristic found!");
           }
+          if (char.uuid.toString().toUpperCase() ==
+              _kAiCharUuid.toUpperCase()) {
+            _aiChar = char;
+            debugPrint("AI characteristic found!");
+          }
         }
 
         if (_ecgChar != null) {
@@ -217,6 +232,19 @@ class EcgProvider extends ChangeNotifier {
               debugPrint("setNotifyValue failed (will try polling): $e");
               bleStatusMessage = "Notifications failed, using polling...";
               notifyListeners();
+            }
+
+            // ── Step 2b: Subscribe to AI characteristic ────────────────
+            if (_aiChar != null) {
+              _aiNotifySub?.cancel();
+              _aiNotifySub = _aiChar!.onValueReceived.listen(_onAiData);
+              try {
+                await _aiChar!.setNotifyValue(true)
+                    .timeout(const Duration(seconds: 5));
+                debugPrint("AI notifications enabled!");
+              } catch (e) {
+                debugPrint("AI notifications failed: $e");
+              }
             }
 
             // ── Step 3: Mark as connected ──────────────────────────────
@@ -392,6 +420,31 @@ class EcgProvider extends ChangeNotifier {
     }
   }
 
+  // ── AI Classification Data Handler ──────────────────────────────────────
+  void _onAiData(List<int> bytes) {
+    try {
+      final jsonStr = utf8.decode(bytes).trim();
+      if (jsonStr.isEmpty) return;
+      final map = json.decode(jsonStr) as Map<String, dynamic>;
+
+      aiClass      = (map['class']      as String?) ?? '---';
+      aiLabel      = (map['label']      as String?) ?? 'Unknown';
+      aiConfidence = (map['confidence'] as num?)?.toDouble() ?? 0.0;
+
+      if (map['probs'] != null) {
+        final probList = map['probs'] as List<dynamic>;
+        aiProbs = probList.map((p) => (p as num).toDouble()).toList();
+        // Pad to 5 if needed
+        while (aiProbs.length < 5) aiProbs.add(0.0);
+      }
+
+      aiAvailable = true;
+      scheduleMicrotask(() => notifyListeners());
+    } catch (_) {
+      // Silently drop malformed AI packets
+    }
+  }
+
   // ── SD Recording control ────────────────────────────────────────────────
 
   Future<void> startSdRecording(String filename) async {
@@ -424,13 +477,16 @@ class EcgProvider extends ChangeNotifier {
 
   void _handleDisconnect() {
     _notifySub?.cancel();
+    _aiNotifySub?.cancel();
     _connStateSub?.cancel();
     _polling = false;
     _device = null;
     _ecgChar = null;
     _commandChar = null;
+    _aiChar = null;
     isRecording = false;
     recordingFilename = "";
+    aiAvailable = false;
     bleState = BleConnectionState.disconnected;
     bleStatusMessage = "Disconnected. Tap to reconnect.";
     notifyListeners();
@@ -444,6 +500,7 @@ class EcgProvider extends ChangeNotifier {
   @override
   void dispose() {
     _notifySub?.cancel();
+    _aiNotifySub?.cancel();
     _connStateSub?.cancel();
     _scanSub?.cancel();
     _postTimer?.cancel();

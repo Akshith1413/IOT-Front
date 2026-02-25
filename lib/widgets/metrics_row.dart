@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/ecg_provider.dart';
+import '../theme/app_theme.dart';
 
 class MetricsRow extends StatelessWidget {
   const MetricsRow({super.key});
@@ -16,27 +17,24 @@ class MetricsRow extends StatelessWidget {
           label: "BPM",
           value: ecg.bpm > 0 ? "${ecg.bpm}" : "—",
           subLabel: "Heart Rate",
-          subColor: const Color(0xFF888888),
           icon: Icons.favorite_rounded,
-          iconColor: const Color(0xFFFF2A6D), // Neon Pink
+          iconColor: AppColors.stellarRose,
         ),
         const SizedBox(width: 12),
         _MetricCard(
           label: "SDNN",
           value: ecg.sdnn > 0 ? "${ecg.sdnn.toStringAsFixed(1)} ms" : "—",
           subLabel: "HRV metric",
-          subColor: const Color(0xFF888888),
           icon: Icons.show_chart,
-          iconColor: const Color(0xFF00D4FF), // Electric Blue
+          iconColor: AppColors.iceBlue,
         ),
         const SizedBox(width: 12),
         _MetricCard(
           label: "RMSSD",
           value: ecg.rmssd > 0 ? "${ecg.rmssd.toStringAsFixed(1)} ms" : "—",
           subLabel: "HRV metric",
-          subColor: const Color(0xFF888888),
           icon: Icons.timeline,
-          iconColor: const Color(0xFFB388FF), // Cyber Purple
+          iconColor: AppColors.plasmaViolet,
         ),
       ],
     );
@@ -47,15 +45,13 @@ class _MetricCard extends StatelessWidget {
   final String label;
   final String value;
   final String subLabel;
-  final Color  subColor;
   final IconData icon;
-  final Color  iconColor;
+  final Color iconColor;
 
   const _MetricCard({
     required this.label,
     required this.value,
     required this.subLabel,
-    required this.subColor,
     required this.icon,
     required this.iconColor,
   });
@@ -70,7 +66,7 @@ class _MetricCard extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.05),
+              color: AppColors.surfaceWhite,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: iconColor.withValues(alpha: 0.3),
@@ -102,7 +98,7 @@ class _MetricCard extends StatelessWidget {
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
-                        color: Color(0xFFB0B0B0),
+                        color: AppColors.textSecondary,
                         letterSpacing: 1.2,
                       ),
                     ),
@@ -113,16 +109,16 @@ class _MetricCard extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.w900,
-                    color: Colors.white,
+                    color: AppColors.textPrimary,
                     fontFeatures: [FontFeature.tabularFigures()],
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(subLabel,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
-                    color: subColor,
+                    color: AppColors.textSecondary,
                   ),
                 ),
               ],

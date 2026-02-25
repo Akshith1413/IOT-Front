@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import '../theme/app_theme.dart';
+import '../widgets/particle_background.dart';
 import '../services/auth_service.dart';
-import 'ecg_dashboard_screen.dart';
 import 'ecg_monitor_screen.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -15,14 +16,14 @@ class HomeScreen extends StatelessWidget {
     final user = Provider.of<User?>(context);
 
     return Scaffold(
-      backgroundColor: Colors.black, // Fallback
+      backgroundColor: AppColors.deepSpace,
       appBar: AppBar(
         title: const Text(
           'IoT Dashboard',
           style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: -0.5),
         ),
         backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
+        foregroundColor: AppColors.textPrimary,
         elevation: 0,
         actions: [
           Padding(
@@ -36,21 +37,25 @@ class HomeScreen extends StatelessWidget {
                     await context.read<AuthService>().signOut();
                   },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
                     decoration: BoxDecoration(
-                      color: const Color(0x26FF2A6D),
+                      color: AppColors.stellarRose.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0x4DFF2A6D)),
+                      border: Border.all(
+                        color: AppColors.stellarRose.withValues(alpha: 0.3),
+                      ),
                     ),
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.logout_rounded, color: Color(0xFFFF2A6D), size: 16),
+                        Icon(Icons.logout_rounded,
+                            color: AppColors.stellarRose, size: 16),
                         SizedBox(width: 8),
                         Text(
                           'Logout',
                           style: TextStyle(
-                            color: Color(0xFFFF2A6D),
+                            color: AppColors.stellarRose,
                             fontSize: 13,
                             fontWeight: FontWeight.w700,
                           ),
@@ -65,63 +70,61 @@ class HomeScreen extends StatelessWidget {
         ],
       ),
       extendBodyBehindAppBar: true,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(-0.5, -0.8),
-            radius: 1.5,
-            colors: [
-              Color(0xFF141933), // Deep Indigo
-              Color(0xFF07090F), // True Black edge
-            ],
-            stops: [0.0, 1.0],
-          ),
-        ),
+      body: ParticleBackground(
+        particleCount: 35,
+        baseColor: AppColors.auroraTeal,
+        accentColor: AppColors.iceBlue,
+        connectionDistance: 110,
+        opacity: 0.7,
         child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-            // Welcome header
-            Text(
-              'Welcome back,',
-              style: TextStyle(
-                color: Colors.grey[500],
-                fontSize: 14,
-              ),
-            ).animate().fadeIn(),
-            const SizedBox(height: 4),
-            Text(
-              user?.displayName ?? user?.email ?? 'Guest',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-              ),
-            ).animate().fadeIn(delay: 100.ms).slideX(begin: -0.1),
-            const SizedBox(height: 28),
-
-            // ECG Monitor card
-            _buildDashboardCard(
-              context,
-              icon: Icons.monitor_heart_rounded,
-              title: 'ECG Monitor',
-              subtitle: 'Real-time ECG visualization & analysis',
-              color: const Color(0xFF00FF9D), // Cyber Green
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const EcgMonitorScreen(),
+                // Welcome header
+                Text(
+                  'Welcome back,',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 14,
                   ),
-                );
-              },
-            ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.1),
-          ],
+                ).animate().fadeIn(),
+                const SizedBox(height: 4),
+                Text(
+                  user?.displayName ?? user?.email ?? 'Guest',
+                  style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ).animate().fadeIn(delay: 100.ms).slideX(begin: -0.1),
+                const SizedBox(height: 28),
+
+                // ECG Monitor card
+                _buildDashboardCard(
+                  context,
+                  icon: Icons.monitor_heart_rounded,
+                  title: 'ECG Monitor',
+                  subtitle: 'Real-time ECG visualization & analysis',
+                  color: AppColors.auroraTeal,
+                  gradientColors: [
+                    AppColors.auroraTeal.withValues(alpha: 0.15),
+                    AppColors.plasmaViolet.withValues(alpha: 0.05),
+                  ],
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const EcgMonitorScreen(),
+                      ),
+                    );
+                  },
+                ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.1),
+              ],
+            ),
+          ),
         ),
-      ),
-      ),
       ),
     );
   }
@@ -132,6 +135,7 @@ class HomeScreen extends StatelessWidget {
     required String title,
     required String subtitle,
     required Color color,
+    required List<Color> gradientColors,
     required VoidCallback onTap,
   }) {
     return Material(
@@ -142,13 +146,18 @@ class HomeScreen extends StatelessWidget {
         child: ClipRRect(
           borderRadius: BorderRadius.circular(24),
           child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
             child: Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.03),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: gradientColors,
+                ),
                 borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
+                border: Border.all(
+                    color: color.withValues(alpha: 0.3), width: 1),
                 boxShadow: [
                   BoxShadow(
                     color: color.withValues(alpha: 0.15),
@@ -183,7 +192,7 @@ class HomeScreen extends StatelessWidget {
                         Text(
                           title,
                           style: const TextStyle(
-                            color: Colors.white,
+                            color: AppColors.textPrimary,
                             fontSize: 20,
                             fontWeight: FontWeight.w800,
                             letterSpacing: -0.5,
@@ -193,7 +202,7 @@ class HomeScreen extends StatelessWidget {
                         Text(
                           subtitle,
                           style: const TextStyle(
-                            color: Color(0xFFAAAAAA),
+                            color: AppColors.textSecondary,
                             fontSize: 14,
                             fontWeight: FontWeight.w500,
                             height: 1.3,
@@ -205,12 +214,12 @@ class HomeScreen extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.1),
+                      color: AppColors.surfaceWhite,
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
                       Icons.arrow_forward_ios_rounded,
-                      color: Colors.white.withValues(alpha: 0.9),
+                      color: AppColors.textPrimary.withValues(alpha: 0.9),
                       size: 16,
                     ),
                   ),

@@ -51,7 +51,11 @@ class MyApp extends StatelessWidget {
         title: 'IoT Front',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF00E5C3),
+            brightness: Brightness.dark,
+          ),
+          scaffoldBackgroundColor: const Color(0xFF070B14),
           useMaterial3: true,
           fontFamily: GoogleFonts.poppins().fontFamily,
         ),

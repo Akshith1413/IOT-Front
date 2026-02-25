@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../providers/ecg_provider.dart';
+import '../theme/app_theme.dart';
 
 class BleStatusBar extends StatelessWidget {
   const BleStatusBar({super.key});
@@ -35,12 +36,11 @@ class BleStatusBar extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Animated dot
               if (isConnected)
                 Container(
                   width: 8, height: 8,
                   decoration: const BoxDecoration(
-                    color: Color(0xFF00FF9D),
+                    color: AppColors.mintGlow,
                     shape: BoxShape.circle,
                   ),
                 ).animate(onPlay: (c) => c.repeat())
@@ -75,11 +75,11 @@ class BleStatusBar extends StatelessWidget {
 
   Color _bgColor(BleConnectionState state) {
     switch (state) {
-      case BleConnectionState.connected:   return const Color(0xFF00FF9D); // Cyber Green
+      case BleConnectionState.connected:    return AppColors.mintGlow;
       case BleConnectionState.scanning:
-      case BleConnectionState.connecting:  return const Color(0xFFFFAA00); // Yellow/Orange
-      case BleConnectionState.error:       return const Color(0xFFFF2A6D); // Neon Pink
-      case BleConnectionState.disconnected:return const Color(0xFF888888);
+      case BleConnectionState.connecting:   return AppColors.cosmicGold;
+      case BleConnectionState.error:        return AppColors.stellarRose;
+      case BleConnectionState.disconnected: return AppColors.textSecondary;
     }
   }
 }

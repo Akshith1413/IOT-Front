@@ -1,11 +1,12 @@
 import 'dart:ui';
-import 'package:animate_gradient/animate_gradient.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import '../theme/app_theme.dart';
+import '../widgets/particle_background.dart';
 import '../services/auth_service.dart';
 import 'login_screen.dart';
-import '../main.dart'; // Import main.dart to access AuthWrapper
+import '../main.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -32,12 +33,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
         leading: Padding(
           padding: const EdgeInsets.all(8.0),
           child: Container(
-            decoration: const BoxDecoration(
-              color: Color(0x19FFFFFF),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceWhite,
               shape: BoxShape.circle,
+              border: Border.all(
+                color: AppColors.cardBorder.withValues(alpha: 0.3),
+              ),
             ),
             child: IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+              icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                  color: AppColors.textPrimary, size: 20),
               onPressed: () => Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(builder: (context) => const LoginScreen()),
@@ -46,41 +51,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
         ),
       ),
-      body: AnimateGradient(
-        primaryBegin: Alignment.topLeft,
-        primaryEnd: Alignment.bottomLeft,
-        secondaryBegin: Alignment.bottomLeft,
-        secondaryEnd: Alignment.topRight,
-        primaryColors: const [
-          Color(0xFF141933), // Deep Indigo
-          Color(0xFF07090F), // True Black edge
-          Color(0xFF141933),
-        ],
-        secondaryColors: [
-          const Color(0x2600FF9D), // Cyber Green hint
-          const Color(0xFF07090F),
-          const Color(0x1900D4FF), // Electric Blue hint
-        ],
+      body: ParticleBackground(
+        particleCount: 55,
+        baseColor: AppColors.plasmaViolet,
+        accentColor: AppColors.auroraTeal,
+        connectionDistance: 130,
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.only(top: 100, left: 24, right: 24, bottom: 24),
+            padding: const EdgeInsets.only(
+                top: 100, left: 24, right: 24, bottom: 24),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(24),
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                 child: Container(
                   padding: const EdgeInsets.all(32.0),
-                  decoration: BoxDecoration(
-                    color: const Color(0x07FFFFFF),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(color: const Color(0x1AFFFFFF), width: 1.5),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x0D00FF9D),
-                        blurRadius: 40,
-                        spreadRadius: -10,
-                      )
-                    ],
+                  decoration: AppDecorations.glassCard(
+                    glowColor: AppColors.plasmaViolet,
                   ),
                   child: Form(
                     key: _formKey,
@@ -89,50 +76,67 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // Icon
                         Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: const BoxDecoration(
+                          padding: const EdgeInsets.all(18),
+                          decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: Color(0x2600FF9D),
+                            gradient: RadialGradient(
+                              colors: [
+                                AppColors.plasmaViolet.withValues(alpha: 0.25),
+                                AppColors.auroraTeal.withValues(alpha: 0.08),
+                              ],
+                            ),
                           ),
                           child: const Icon(
                             Icons.person_add_rounded,
-                            size: 64,
-                            color: Color(0xFF00FF9D),
+                            size: 56,
+                            color: AppColors.plasmaViolet,
                           ),
-                        ).animate().scale(duration: 500.ms, curve: Curves.easeOutBack),
-                        const SizedBox(height: 24),
+                        ).animate().scale(
+                            duration: 500.ms, curve: Curves.easeOutBack),
+
+                        const SizedBox(height: 28),
+
                         const Text(
                           'Create Account',
                           textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                            letterSpacing: -0.5,
-                          ),
-                        ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.3, end: 0),
+                          style: AppTextStyles.heading,
+                        ).animate().fadeIn(delay: 200.ms).slideY(
+                            begin: 0.3, end: 0),
+
                         const SizedBox(height: 8),
                         const Text(
                           'Join us to monitor your heart',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: Color(0xFFAAAAAA), fontSize: 14),
-                        ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.3, end: 0),
+                          style: AppTextStyles.subheading,
+                        ).animate().fadeIn(delay: 300.ms).slideY(
+                            begin: 0.3, end: 0),
+
                         const SizedBox(height: 48),
+
                         _buildTextField(
                           label: 'Full Name',
                           icon: Icons.person_outline,
                           onChanged: (val) => name = val,
-                          validator: (val) => val!.isEmpty ? 'Enter your name' : null,
-                        ).animate().fadeIn(delay: 350.ms).slideX(begin: -0.2, end: 0),
+                          validator: (val) =>
+                              val!.isEmpty ? 'Enter your name' : null,
+                        ).animate().fadeIn(delay: 350.ms).slideX(
+                            begin: -0.2, end: 0),
+
                         const SizedBox(height: 16),
+
                         _buildTextField(
                           label: 'Email',
                           icon: Icons.email_outlined,
                           onChanged: (val) => email = val,
-                          validator: (val) => val!.isEmpty ? 'Enter an email' : null,
-                        ).animate().fadeIn(delay: 400.ms).slideX(begin: -0.2, end: 0),
+                          validator: (val) =>
+                              val!.isEmpty ? 'Enter an email' : null,
+                        ).animate().fadeIn(delay: 400.ms).slideX(
+                            begin: -0.2, end: 0),
+
                         const SizedBox(height: 16),
+
                         _buildTextField(
                           label: 'Password',
                           icon: Icons.lock_outline,
@@ -151,98 +155,150 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             if (!val.contains(RegExp(r'[0-9]'))) {
                               return 'Must contain at least one number';
                             }
-                            if (!val.contains(RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) {
+                            if (!val.contains(
+                                RegExp(r'[!@#$%^&*(),.?":{}|<>]'))) {
                               return 'Must contain at least one special character';
                             }
                             return null;
                           },
-                        ).animate().fadeIn(delay: 500.ms).slideX(begin: -0.2, end: 0),
+                        ).animate().fadeIn(delay: 500.ms).slideX(
+                            begin: -0.2, end: 0),
+
                         const SizedBox(height: 24),
+
                         if (error.isNotEmpty)
                           Padding(
                             padding: const EdgeInsets.only(bottom: 16.0),
                             child: Text(
                               error,
-                              style: const TextStyle(color: Color(0xFFFF2A6D), fontSize: 13, fontWeight: FontWeight.w600),
+                              style: const TextStyle(
+                                color: AppColors.stellarRose,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
                               textAlign: TextAlign.center,
                             ),
                           ).animate().fadeIn(),
-                        ElevatedButton(
-                          onPressed: loading
-                              ? null
-                              : () async {
-                                  if (_formKey.currentState!.validate()) {
-                                    setState(() => loading = true);
-                                    try {
-                                      await context
-                                          .read<AuthService>()
-                                          .registerWithEmailAndPassword(
-                                              email, password, name);
-                                              
-                                      if (context.mounted) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(
-                                            content: const Text('Account created successfully!', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                                            backgroundColor: const Color(0xFF00FF9D),
-                                            behavior: SnackBarBehavior.floating,
-                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                          ),
-                                        );
-                                        Navigator.of(context).pushAndRemoveUntil(
-                                          MaterialPageRoute(
-                                              builder: (context) => const AuthWrapper()),
-                                          (route) => false,
-                                        );
-                                      }
-                                    } catch (e) {
-                                      setState(() {
-                                        error = e.toString();
-                                        loading = false;
-                                      });
-                                    }
-                                  }
-                                },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF00FF9D),
-                            foregroundColor: Colors.black,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
+
+                        // Sign Up Button
+                        Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            gradient: const LinearGradient(
+                              colors: [
+                                AppColors.plasmaViolet,
+                                Color(0xFF7C3AED),
+                              ],
                             ),
-                            elevation: 0,
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.plasmaViolet
+                                    .withValues(alpha: 0.4),
+                                blurRadius: 20,
+                                spreadRadius: -4,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
                           ),
-                          child: loading
-                              ? const SizedBox(
-                                  height: 20,
-                                  width: 20,
-                                  child: CircularProgressIndicator(
-                                    color: Colors.black87,
-                                    strokeWidth: 2,
+                          child: ElevatedButton(
+                            onPressed: loading
+                                ? null
+                                : () async {
+                                    if (_formKey.currentState!.validate()) {
+                                      setState(() => loading = true);
+                                      try {
+                                        await context
+                                            .read<AuthService>()
+                                            .registerWithEmailAndPassword(
+                                                email, password, name);
+
+                                        if (context.mounted) {
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            SnackBar(
+                                              content: const Text(
+                                                'Account created successfully!',
+                                                style: TextStyle(
+                                                  color: AppColors.deepSpace,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                              backgroundColor:
+                                                  AppColors.auroraTeal,
+                                              behavior:
+                                                  SnackBarBehavior.floating,
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                            ),
+                                          );
+                                          Navigator.of(context)
+                                              .pushAndRemoveUntil(
+                                            MaterialPageRoute(
+                                                builder: (context) =>
+                                                    const AuthWrapper()),
+                                            (route) => false,
+                                          );
+                                        }
+                                      } catch (e) {
+                                        setState(() {
+                                          error = e.toString();
+                                          loading = false;
+                                        });
+                                      }
+                                    }
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                              shadowColor: Colors.transparent,
+                              foregroundColor: Colors.white,
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              elevation: 0,
+                            ),
+                            child: loading
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Text(
+                                    'Sign Up',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w800,
+                                    ),
                                   ),
-                                )
-                              : const Text(
-                                  'Sign Up',
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                                ),
+                          ),
                         ).animate().fadeIn(delay: 600.ms).scale(),
+
                         const SizedBox(height: 24),
+
                         TextButton(
                           onPressed: () {
                             Navigator.pushReplacement(
                               context,
                               MaterialPageRoute(
-                                  builder: (context) => const LoginScreen()),
+                                  builder: (context) =>
+                                      const LoginScreen()),
                             );
                           },
                           child: RichText(
                             text: const TextSpan(
                               text: "Already have an account? ",
-                              style: TextStyle(color: Color(0xFFAAAAAA), fontSize: 14),
+                              style: AppTextStyles.subheading,
                               children: [
                                 TextSpan(
                                   text: 'Sign In',
                                   style: TextStyle(
-                                    color: Color(0xFF00D4FF), // Electric Blue
+                                    color: AppColors.auroraTeal,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
@@ -270,32 +326,41 @@ class _RegisterScreenState extends State<RegisterScreen> {
     bool obscureText = false,
   }) {
     return TextFormField(
-      style: const TextStyle(color: Colors.white, fontSize: 15),
+      style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: Color(0x99FFFFFF), fontSize: 14),
-        prefixIcon: Icon(icon, color: const Color(0xCC00FF9D), size: 22),
+        labelStyle: TextStyle(
+          color: AppColors.textSecondary.withValues(alpha: 0.8),
+          fontSize: 14,
+        ),
+        prefixIcon: Icon(icon,
+            color: AppColors.plasmaViolet.withValues(alpha: 0.8), size: 22),
         filled: true,
-        fillColor: const Color(0x4D000000),
+        fillColor: AppColors.deepSpace.withValues(alpha: 0.6),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: Color(0x0DFFFFFF), width: 1.5),
+          borderSide: BorderSide(
+            color: AppColors.cardBorder.withValues(alpha: 0.5),
+            width: 1,
+          ),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: Color(0xFF00FF9D), width: 1.5),
+          borderSide:
+              const BorderSide(color: AppColors.plasmaViolet, width: 1.5),
         ),
-        errorStyle: const TextStyle(color: Color(0xFFFF2A6D)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+        errorStyle: const TextStyle(color: AppColors.stellarRose),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
       ),
       obscureText: obscureText,
       onChanged: onChanged,
       validator: validator,
-      cursorColor: const Color(0xFF00FF9D),
+      cursorColor: AppColors.plasmaViolet,
     );
   }
 }
