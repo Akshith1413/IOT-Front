@@ -54,6 +54,10 @@ class EcgProvider extends ChangeNotifier {
   bool   isRecording     = false;
   String recordingFilename = "";
 
+  // ── Simulator Mode ────────────────────────────────────────────────────
+  bool   isSimulator         = false;
+  String simulatorCondition  = '';     // '', 'N', 'S', 'V', 'F', 'Q'
+
   // ── R-R interval tracking for HRV ──────────────────────────────────────
   DateTime? _lastPeakTime;
   final ListQueue<double> _rrIntervals = ListQueue<double>(); // ms
@@ -475,6 +479,36 @@ class EcgProvider extends ChangeNotifier {
     }
   }
 
+  // ── Simulator Mode Control ───────────────────────────────────────────
+
+  Future<void> setSimulatorCondition(String condition) async {
+    if (_commandChar == null) {
+      debugPrint("Command characteristic not available");
+      return;
+    }
+    final cmd = "SIM,$condition";
+    try {
+      await _commandChar!.write(utf8.encode(cmd), withoutResponse: true);
+      isSimulator = true;
+      simulatorCondition = condition;
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Failed to send SIM command: $e");
+    }
+  }
+
+  Future<void> exitSimulator() async {
+    if (_commandChar == null) return;
+    try {
+      await _commandChar!.write(utf8.encode("SIM,OFF"), withoutResponse: true);
+      isSimulator = false;
+      simulatorCondition = '';
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Failed to send SIM,OFF command: $e");
+    }
+  }
+
   void _handleDisconnect() {
     _notifySub?.cancel();
     _aiNotifySub?.cancel();
@@ -487,6 +521,8 @@ class EcgProvider extends ChangeNotifier {
     isRecording = false;
     recordingFilename = "";
     aiAvailable = false;
+    isSimulator = false;
+    simulatorCondition = '';
     bleState = BleConnectionState.disconnected;
     bleStatusMessage = "Disconnected. Tap to reconnect.";
     notifyListeners();

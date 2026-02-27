@@ -94,11 +94,15 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              "128 SPS · Real-time",
+                              ecg.isSimulator
+                                ? "⚡ Simulating: ${_conditionLabel(ecg.simulatorCondition)}"
+                                : "128 SPS · Real-time",
                               style: TextStyle(
                                 fontSize: 12,
-                                color: AppColors.textSecondary.withValues(alpha: 0.6),
-                                fontWeight: FontWeight.w500,
+                                color: ecg.isSimulator
+                                  ? AppColors.cosmicGold.withValues(alpha: 0.9)
+                                  : AppColors.textSecondary.withValues(alpha: 0.6),
+                                fontWeight: ecg.isSimulator ? FontWeight.w700 : FontWeight.w500,
                               ),
                             ),
                           ],
@@ -165,6 +169,15 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
                   _buildAiCard(ecg)
                       .animate()
                       .fadeIn(delay: 400.ms, duration: 500.ms)
+                      .slideY(begin: 0.1, end: 0),
+
+                const SizedBox(height: 8),
+
+                // ── Simulator Control Panel ──
+                if (ecg.bleState == BleConnectionState.connected)
+                  _buildSimulatorPanel(ecg)
+                      .animate()
+                      .fadeIn(delay: 500.ms, duration: 500.ms)
                       .slideY(begin: 0.1, end: 0),
 
                 const SizedBox(height: 12),
@@ -434,6 +447,162 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
         ],
       ),
     );
+  }
+
+  // ── Simulator Control Panel ──
+  Widget _buildSimulatorPanel(EcgProvider ecg) {
+    const conditions = [
+      {'code': 'N', 'label': 'Normal',     'color': 0xFF4ADE80}, // green
+      {'code': 'S', 'label': 'SupraVE',    'color': 0xFFA78BFA}, // purple
+      {'code': 'V', 'label': 'Ventricular','color': 0xFFF87171}, // red
+      {'code': 'F', 'label': 'Fusion',     'color': 0xFFFBBF24}, // amber
+      {'code': 'Q', 'label': 'Unknown',    'color': 0xFF94A3B8}, // slate
+    ];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceWhite,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: ecg.isSimulator
+              ? AppColors.cosmicGold.withValues(alpha: 0.4)
+              : AppColors.cardBorder.withValues(alpha: 0.3),
+        ),
+        boxShadow: ecg.isSimulator
+            ? [
+                BoxShadow(
+                  color: AppColors.cosmicGold.withValues(alpha: 0.1),
+                  blurRadius: 16,
+                  spreadRadius: -4,
+                )
+              ]
+            : [],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header row with toggle
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.science_rounded,
+                    color: ecg.isSimulator
+                        ? AppColors.cosmicGold
+                        : AppColors.textSecondary.withValues(alpha: 0.5),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Simulator',
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(
+                height: 28,
+                child: Switch(
+                  value: ecg.isSimulator,
+                  onChanged: (val) {
+                    if (val) {
+                      ecg.setSimulatorCondition('N');
+                    } else {
+                      ecg.exitSimulator();
+                    }
+                  },
+                  activeColor: AppColors.cosmicGold,
+                  activeTrackColor: AppColors.cosmicGold.withValues(alpha: 0.3),
+                ),
+              ),
+            ],
+          ),
+
+          // Condition chips (visible when simulator is active)
+          if (ecg.isSimulator) ...[
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: conditions.map((c) {
+                final code  = c['code'] as String;
+                final label = c['label'] as String;
+                final color = Color(c['color'] as int);
+                final isActive = ecg.simulatorCondition == code;
+
+                return GestureDetector(
+                  onTap: () => ecg.setSimulatorCondition(code),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? color.withValues(alpha: 0.2)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isActive
+                            ? color.withValues(alpha: 0.6)
+                            : AppColors.cardBorder.withValues(alpha: 0.2),
+                        width: isActive ? 1.5 : 1,
+                      ),
+                      boxShadow: isActive
+                          ? [
+                              BoxShadow(
+                                color: color.withValues(alpha: 0.2),
+                                blurRadius: 8,
+                                spreadRadius: -2,
+                              )
+                            ]
+                          : [],
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          code,
+                          style: TextStyle(
+                            color: isActive ? color : AppColors.textSecondary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          label,
+                          style: TextStyle(
+                            color: isActive
+                                ? color.withValues(alpha: 0.8)
+                                : AppColors.textSecondary.withValues(alpha: 0.5),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _conditionLabel(String code) {
+    switch (code) {
+      case 'N': return 'Normal';
+      case 'S': return 'Supraventricular';
+      case 'V': return 'Ventricular';
+      case 'F': return 'Fusion';
+      case 'Q': return 'Unknown';
+      default:  return code;
+    }
   }
 }
 

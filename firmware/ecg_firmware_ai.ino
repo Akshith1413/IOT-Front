@@ -18,8 +18,13 @@
 //  Model output: [1, 5]       — logits for each class
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#include <SPI.h>
+// ── Custom SPI (register-level nRF52840 SPIM0 driver) ────────────────────
+#define USE_CUSTOM_SPI
+#include "custom_spi.h"
+
 #include <SD.h>
+
+// USE_CUSTOM_SPI must be defined BEFORE this include
 #include <protocentral_max30001.h>
 #include <ArduinoBLE.h>
 
@@ -37,7 +42,7 @@
 #define MAX30001_CS_PIN 10
 #define SD_CS_PIN       9
 
-MAX30001 ecgSensor(MAX30001_CS_PIN);
+MAX30001 ecgSensor(MAX30001_CS_PIN, &customSPI);
 
 // ─── DEBUG MODE ──────────────────────────────────────────────────────────────
 #define DEBUG_MODE false
@@ -83,12 +88,18 @@ int medianIndex = 0;
 int32_t baseline      = 0;
 float   baselineAlpha = 0.001;
 
-// ─── Heart Rate Detection ────────────────────────────────────────────────────
-int32_t       peakThreshold = 50;
-unsigned long lastPeakTime  = 0;
-unsigned long peakInterval  = 0;
+// ─── Heart Rate Detection (Hardware R-to-R) ─────────────────────────────────
 int           heartRate     = 0;
-bool          peakDetected  = false;
+unsigned int  rrInterval    = 0;
+bool          rrDetected    = false;
+#define RTOR_POLL_INTERVAL_MS 500
+unsigned long lastRtoRPollTime = 0;
+
+// ─── Simulator Mode ──────────────────────────────────────────────────────────
+bool          simulatorMode    = false;
+char          simCondition     = 'N';   // N, S, V, F, Q
+unsigned long simSampleIndex   = 0;
+int           simHeartRate     = 72;
 
 // ─── BLE State ───────────────────────────────────────────────────────────────
 bool bleConnected = false;
@@ -473,6 +484,36 @@ void handleBLECommand(const String& cmd) {
   } else if (cmd.startsWith("STOP")) {
     stopRecording();
 
+  } else if (cmd.startsWith("SIM,")) {
+    // ── Simulator mode commands ──────────────────────────────────────────
+    String arg = cmd.substring(4);
+    arg.trim();
+    arg.toUpperCase();
+
+    if (arg == "OFF") {
+      simulatorMode = false;
+      simSampleIndex = 0;
+      debugPrint("[SIM] Simulator OFF — returning to real ECG");
+      statusCharacteristic.writeValue("SIM_OFF");
+    } else if (arg.length() == 1 && String("NSVFQ").indexOf(arg[0]) >= 0) {
+      simulatorMode  = true;
+      simCondition   = arg[0];
+      simSampleIndex = 0;
+      // Reset AI buffer for fresh inference on new condition
+      aiBufferIndex = 0;
+      aiBufferFull  = false;
+      lastInferenceTime = 0;
+      if (DEBUG_MODE) {
+        Serial.print("[SIM] Simulating condition: ");
+        Serial.println(simCondition);
+      }
+      char statusBuf[16];
+      snprintf(statusBuf, sizeof(statusBuf), "SIM_%c", simCondition);
+      statusCharacteristic.writeValue(statusBuf);
+    } else {
+      debugPrint("[SIM] Unknown condition: " + arg);
+    }
+
   } else {
     debugPrint("Unknown command: " + cmd);
   }
@@ -523,7 +564,7 @@ void setup() {
   debugPrint("AI Char: 12345678-1234-1234-1234-123456789AC0");
 
   // ── MAX30001 Init ─────────────────────────────────────────────────────────
-  SPI.begin();
+  customSPI.begin();
   debugPrint("Initializing MAX30001...");
 
   max30001_error_t result = ecgSensor.begin();
@@ -611,39 +652,66 @@ void loop() {
     }
   }
 
-  // ── ECG Sample Acquisition ────────────────────────────────────────────────
-  max30001_ecg_sample_t ecgSample;
-  max30001_error_t result = ecgSensor.getECGSample(&ecgSample);
+  // ── ECG Sample Acquisition (Real or Simulated) ─────────────────────────
+  float    ecgValueForAI = 0.0f;
+  int32_t  filtered      = 0;
+  bool     sampleReady   = false;
 
-  if (result == MAX30001_SUCCESS && ecgSample.sample_valid) {
-    int32_t rawValue = ecgSample.ecg_sample;
+  if (simulatorMode) {
+    // ── Simulator path: generate synthetic ECG ──────────────────────────
+    ecgValueForAI = generateSimulatedECG(simCondition);
+    filtered = (int32_t)(ecgValueForAI * 65536.0f);
+    heartRate = simHeartRate;
+    rrDetected = (ecgValueForAI > 0.5f);  // Approximate peak detection
+    sampleReady = true;
+    simSampleIndex++;
 
-    // ── Filtering pipeline ────────────────────────────────────────────────
-    int32_t medianFiltered = medianFilter(rawValue);
-    int32_t smoothed       = movingAverage(medianFiltered);
-    baseline = (int32_t)(baseline * (1.0 - baselineAlpha) + smoothed * baselineAlpha);
-    int32_t filtered = smoothed - baseline;
+  } else {
+    // ── Real MAX30001 path ──────────────────────────────────────────────
+    max30001_ecg_sample_t ecgSample;
+    max30001_error_t result = ecgSensor.getECGSample(&ecgSample);
 
-    // ── Peak detection ────────────────────────────────────────────────────
-    detectPeak(filtered);
+    if (result == MAX30001_SUCCESS && ecgSample.sample_valid) {
+      int32_t rawValue = ecgSample.ecg_sample;
 
-    // ── Feed AI buffer ────────────────────────────────────────────────────
-    // Convert to millivolts (same scale the model was trained on)
-    float ecgMvForAI = (float)filtered / 65536.0f;
-    aiInputBuffer[aiBufferIndex] = ecgMvForAI;
+      // ── Filtering pipeline ──────────────────────────────────────────
+      int32_t medianFiltered = medianFilter(rawValue);
+      int32_t smoothed       = movingAverage(medianFiltered);
+      baseline = (int32_t)(baseline * (1.0 - baselineAlpha) + smoothed * baselineAlpha);
+      filtered = smoothed - baseline;
+      ecgValueForAI = (float)filtered / 65536.0f;
+
+      // ── Hardware R-to-R heart rate polling ──────────────────────────
+      if (millis() - lastRtoRPollTime >= RTOR_POLL_INTERVAL_MS) {
+        lastRtoRPollTime = millis();
+        max30001_rtor_data_t rtorData;
+        if (ecgSensor.getRtoRData(&rtorData) == MAX30001_SUCCESS && rtorData.rr_detected) {
+          heartRate  = rtorData.heart_rate_bpm;
+          rrInterval = rtorData.rr_interval_ms;
+          rrDetected = true;
+        } else {
+          rrDetected = false;
+        }
+      }
+      sampleReady = true;
+    }
+  }
+
+  // ── Common processing for both real and simulated ────────────────────────
+  if (sampleReady) {
+    // ── Feed AI buffer ──────────────────────────────────────────────────
+    aiInputBuffer[aiBufferIndex] = ecgValueForAI;
     aiBufferIndex++;
 
     if (aiBufferIndex >= AI_INPUT_SIZE) {
       aiBufferFull = true;
       aiBufferIndex = 0;
-
-      // ── Run AI inference when buffer is full ──────────────────────────
       runInference();
     }
 
-    // ── Serial output ─────────────────────────────────────────────────────
+    // ── Serial output ───────────────────────────────────────────────────
     if (DEBUG_MODE) {
-      Serial.print("ECG:");
+      Serial.print(simulatorMode ? "[SIM]" : "ECG:");
       Serial.print(filtered);
       Serial.print(",HR:");
       Serial.print(heartRate);
@@ -653,19 +721,19 @@ void loop() {
       Serial.println(filtered);
     }
 
-    // ── Timestamp ─────────────────────────────────────────────────────────
+    // ── Timestamp ───────────────────────────────────────────────────────
     char tsBuffer[32];
     millisToISO8601(millis(), tsBuffer, sizeof(tsBuffer));
 
-    const char* peakStatus = peakDetected ? "peak" : "normal";
+    const char* peakStatus = rrDetected ? "peak" : "normal";
 
-    // ── SD Card recording ─────────────────────────────────────────────────
-    if (isRecording) {
+    // ── SD Card recording ───────────────────────────────────────────────
+    if (isRecording && !simulatorMode) {
       float ecgMv = (float)filtered / 65536.0f;
-      writeToSD(tsBuffer, rawValue, filtered, ecgMv, heartRate, peakStatus);
+      writeToSD(tsBuffer, 0, filtered, ecgMv, heartRate, peakStatus);
     }
 
-    // ── BLE send (only when connected) ────────────────────────────────────
+    // ── BLE send (only when connected) ──────────────────────────────────
     if (bleConnected) {
       bleSampleCounter++;
       if (bleSampleCounter >= BLE_SEND_EVERY_N_SAMPLES) {
@@ -686,30 +754,155 @@ void sendECGoverBLE(int32_t filteredValue, const char* timestamp, const char* st
 
   char jsonBuffer[128];
   snprintf(jsonBuffer, sizeof(jsonBuffer),
-    "{\"timestamp\":\"%s\",\"ecg_value\":%.6f,\"status\":\"%s\"}",
-    timestamp, ecgFloat, status
+    "{\"timestamp\":\"%s\",\"ecg_value\":%.6f,\"heart_rate\":%d,\"status\":\"%s\"}",
+    timestamp, ecgFloat, heartRate, status
   );
 
   ecgCharacteristic.writeValue(jsonBuffer);
 }
 
-// ─── Peak Detection ──────────────────────────────────────────────────────────
-void detectPeak(int32_t value) {
-  unsigned long now = millis();
+// ─── Heart Rate (Hardware R-to-R) ────────────────────────────────────────────
+// Heart rate is now read directly from the MAX30001 RTOR register.
+// No software peak detection needed — the chip handles it in hardware.
 
-  if (value > peakThreshold && !peakDetected) {
-    if (now - lastPeakTime > 300) {
-      peakInterval = now - lastPeakTime;
-      lastPeakTime = now;
-      if (peakInterval > 0) {
-        heartRate = 60000 / peakInterval;
-      }
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ECG Simulator — Synthetic Waveform Generator
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+//  Generates mathematically-modeled PQRST waveforms for 5 arrhythmia conditions.
+//  Used to test the on-device AI model without needing a patient.
+//
+//  Each condition produces a distinct ECG morphology:
+//    N = Normal sinus rhythm (72 BPM, regular PQRST)
+//    S = Supraventricular ectopic (premature beats, ~100 BPM)
+//    V = Ventricular ectopic (wide QRS, no P wave, irregular)
+//    F = Fusion (alternating normal + ventricular morphology)
+//    Q = Unknown/noisy (attenuated signal with artifacts)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static float simGaussian(float x, float mu, float sigma) {
+  float d = (x - mu) / sigma;
+  return exp(-0.5f * d * d);
+}
+
+float generateSimulatedECG(char condition) {
+  // Sample rate = 128 Hz, so dt = 1/128 = 0.0078125 sec
+  float t = (float)simSampleIndex / 128.0f;  // time in seconds
+  float noise = ((float)(random(-100, 100))) / 10000.0f;  // ±0.01 mV noise
+
+  switch (condition) {
+
+    // ── Normal Sinus Rhythm (N) ─────────────────────────────────────────
+    // 72 BPM = 0.833s period, standard PQRST morphology
+    case 'N': {
+      simHeartRate = 72;
+      float period = 60.0f / 72.0f;  // ~0.833s
+      float phase  = fmod(t, period) / period;
+
+      float ecg = 0.0f;
+      if (phase < 0.12f)      ecg =  0.15f * simGaussian(phase, 0.06f, 0.025f);  // P wave
+      else if (phase < 0.17f) ecg = -0.10f * simGaussian(phase, 0.145f, 0.012f); // Q
+      else if (phase < 0.24f) ecg =  1.20f * simGaussian(phase, 0.20f, 0.014f);  // R (tall)
+      else if (phase < 0.30f) ecg = -0.20f * simGaussian(phase, 0.27f, 0.015f);  // S
+      else if (phase < 0.58f) ecg =  0.25f * simGaussian(phase, 0.48f, 0.040f);  // T wave
+
+      return ecg + noise;
     }
-    peakDetected = true;
-  }
 
-  if (value < peakThreshold * 0.5) {
-    peakDetected = false;
+    // ── Supraventricular Ectopic (S) ────────────────────────────────────
+    // Premature beats: shorter R-R intervals, slightly faster
+    case 'S': {
+      simHeartRate = 100;
+      float period = 60.0f / 100.0f;  // 0.6s
+      float cycle  = fmod(t, period * 3.0f);  // 3-beat pattern
+      float localPhase;
+
+      if (cycle < period) {
+        localPhase = cycle / period;  // Normal beat
+      } else if (cycle < period * 1.7f) {
+        localPhase = (cycle - period) / (period * 0.7f);  // Premature beat
+      } else {
+        localPhase = (cycle - period * 1.7f) / (period * 1.3f);  // Compensatory pause
+      }
+
+      float ecg = 0.0f;
+      if (localPhase < 0.12f)      ecg =  0.12f * simGaussian(localPhase, 0.06f, 0.020f);
+      else if (localPhase < 0.17f) ecg = -0.08f * simGaussian(localPhase, 0.145f, 0.010f);
+      else if (localPhase < 0.24f) ecg =  1.00f * simGaussian(localPhase, 0.20f, 0.013f);
+      else if (localPhase < 0.30f) ecg = -0.15f * simGaussian(localPhase, 0.27f, 0.013f);
+      else if (localPhase < 0.58f) ecg =  0.20f * simGaussian(localPhase, 0.48f, 0.035f);
+
+      return ecg + noise;
+    }
+
+    // ── Ventricular Ectopic (V) ─────────────────────────────────────────
+    // Wide QRS (2× normal width), no P wave, higher amplitude, irregular
+    case 'V': {
+      simHeartRate = 85;
+      float period = 60.0f / 85.0f;
+      float phase  = fmod(t, period) / period;
+
+      float ecg = 0.0f;
+      // No P wave — ventricular origin bypasses atria
+      if (phase < 0.30f)      ecg =  1.80f * simGaussian(phase, 0.18f, 0.035f);  // Wide R
+      else if (phase < 0.42f) ecg = -0.60f * simGaussian(phase, 0.36f, 0.030f);  // Deep S
+      else if (phase < 0.70f) ecg = -0.30f * simGaussian(phase, 0.55f, 0.050f);  // Inverted T
+
+      return ecg + noise * 2.0f;  // Slightly noisier
+    }
+
+    // ── Fusion (F) ──────────────────────────────────────────────────────
+    // Alternating normal and ventricular beats (mixed morphology)
+    case 'F': {
+      simHeartRate = 78;
+      float period = 60.0f / 78.0f;
+      int   beatNum  = (int)(t / period);
+      float phase    = fmod(t, period) / period;
+      bool  isVBeat  = (beatNum % 2 == 1);  // Every other beat is ventricular
+
+      float ecg = 0.0f;
+      if (isVBeat) {
+        // Ventricular-like beat (fusion — partial normal morphology)
+        if (phase < 0.08f)      ecg =  0.05f * simGaussian(phase, 0.04f, 0.015f);  // Tiny P
+        else if (phase < 0.28f) ecg =  1.40f * simGaussian(phase, 0.18f, 0.028f);  // Wide R
+        else if (phase < 0.40f) ecg = -0.40f * simGaussian(phase, 0.34f, 0.025f);  // S
+        else if (phase < 0.60f) ecg = -0.10f * simGaussian(phase, 0.50f, 0.040f);  // Flat T
+      } else {
+        // Normal beat
+        if (phase < 0.12f)      ecg =  0.15f * simGaussian(phase, 0.06f, 0.025f);
+        else if (phase < 0.17f) ecg = -0.10f * simGaussian(phase, 0.145f, 0.012f);
+        else if (phase < 0.24f) ecg =  1.20f * simGaussian(phase, 0.20f, 0.014f);
+        else if (phase < 0.30f) ecg = -0.20f * simGaussian(phase, 0.27f, 0.015f);
+        else if (phase < 0.58f) ecg =  0.25f * simGaussian(phase, 0.48f, 0.040f);
+      }
+
+      return ecg + noise;
+    }
+
+    // ── Unknown / Noisy (Q) ─────────────────────────────────────────────
+    // Attenuated signal with random artifacts — intentionally hard to classify
+    case 'Q': {
+      simHeartRate = 65;
+      float period = 60.0f / 65.0f;
+      float phase  = fmod(t, period) / period;
+
+      float ecg = 0.0f;
+      // Heavily attenuated normal PQRST
+      if (phase < 0.12f)      ecg =  0.03f * simGaussian(phase, 0.06f, 0.025f);
+      else if (phase < 0.17f) ecg = -0.02f * simGaussian(phase, 0.145f, 0.012f);
+      else if (phase < 0.24f) ecg =  0.30f * simGaussian(phase, 0.20f, 0.014f);
+      else if (phase < 0.30f) ecg = -0.05f * simGaussian(phase, 0.27f, 0.015f);
+      else if (phase < 0.58f) ecg =  0.06f * simGaussian(phase, 0.48f, 0.040f);
+
+      // Add random artifacts (motion noise, baseline wander)
+      float artifact = ((float)(random(-500, 500))) / 1000.0f;
+      float wander   = 0.1f * sin(t * 0.3f);  // Slow baseline drift
+
+      return ecg + artifact * 0.3f + wander + noise * 5.0f;
+    }
+
+    default:
+      return noise;
   }
 }
 
