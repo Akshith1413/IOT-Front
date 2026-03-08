@@ -198,7 +198,6 @@ class _EcgDashboardScreenState extends State<EcgDashboardScreen>
                 ? _buildEmptyState()
                 : _buildDashboard(),
       ),
-      floatingActionButton: _buildFAB(),
     );
   }
 

@@ -79,7 +79,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                         const SizedBox(height: 8),
                         const Text(
-                          'Sign in to your IoT Dashboard',
+                          'Sign in to CardioSync',
                           textAlign: TextAlign.center,
                           style: AppTextStyles.subheading,
                         ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.3, end: 0),

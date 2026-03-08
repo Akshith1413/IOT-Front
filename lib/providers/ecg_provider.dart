@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:http/http.dart' as http;
@@ -9,7 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/ecg_sample.dart';
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const String _kDeviceName      = "ECG_Nano33";
+const String _kDeviceName      = "ECG_Nano33_AI";
 const String _kServiceUuid     = "12345678-1234-1234-1234-123456789ABC";
 const String _kEcgCharUuid     = "12345678-1234-1234-1234-123456789ABD";
 const String _kStatusCharUuid  = "12345678-1234-1234-1234-123456789ABE";
@@ -54,9 +53,34 @@ class EcgProvider extends ChangeNotifier {
   bool   isRecording     = false;
   String recordingFilename = "";
 
-  // ── R-R interval tracking for HRV ──────────────────────────────────────
-  DateTime? _lastPeakTime;
-  final ListQueue<double> _rrIntervals = ListQueue<double>(); // ms
+  // ── Disconnect guard ────────────────────────────────────────────────────
+  bool isDisconnecting = false;
+
+
+
+  // ── Throttled UI updates (~20 FPS) ──────────────────────────────────────
+  DateTime _lastNotify = DateTime.fromMillisecondsSinceEpoch(0);
+  static const int _kMinNotifyIntervalMs = 50; // ~20 FPS
+  bool _notifyScheduled = false;
+
+  void _throttledNotify() {
+    if (_notifyScheduled) return;
+    final now = DateTime.now();
+    final elapsed = now.difference(_lastNotify).inMilliseconds;
+    if (elapsed >= _kMinNotifyIntervalMs) {
+      _lastNotify = now;
+      notifyListeners();
+    } else {
+      _notifyScheduled = true;
+      Future.delayed(Duration(milliseconds: _kMinNotifyIntervalMs - elapsed), () {
+        _notifyScheduled = false;
+        _lastNotify = DateTime.now();
+        notifyListeners();
+      });
+    }
+  }
+
+  // ── R-R interval tracking (firmware computes HRV, we just receive) ─────
 
   // ── HTTP post queue (fire-and-forget, non-blocking) ─────────────────
   // We batch post every N samples to avoid flooding the backend at 128 SPS
@@ -323,7 +347,7 @@ class EcgProvider extends ChangeNotifier {
           final interpSample = EcgSample(
             timestamp: sample.timestamp,
             ecgValue: interpVal,
-            status: 'normal',
+            beat: 'normal',
           );
           chartBuffer.addLast(interpSample);
           if (chartBuffer.length > _kMaxChartPoints) {
@@ -339,62 +363,36 @@ class EcgProvider extends ChangeNotifier {
         chartBuffer.removeFirst();
       }
 
-      // 2. Update HRV & BPM on peaks
-      if (sample.status == 'peak') {
-        _processPeak(sample.timestamp);
+      // 2. Update HR from firmware (software peak detection with EMA)
+      if (sample.heartRate > 0) {
+        bpm = sample.heartRate;
       }
 
-      // 3. Queue for backend POST
+      // 3. Update HRV metrics directly from firmware-computed values
+      if (sample.sdnn > 0) sdnn = sample.sdnn;
+      if (sample.rmssd > 0) rmssd = sample.rmssd;
+
+      // 4. Track peaks
+      if (sample.beat == 'peak') {
+        peakCount++;
+      }
+
+      // 5. Queue for backend POST
       _postQueue.add(sample);
       if (_postQueue.length >= _kPostBatchSize) {
         _flushPostQueue();
       }
 
-      // ── Notify listeners for chart repaint ──────────────────────────
-      scheduleMicrotask(() => notifyListeners());
+      // ── Notify listeners for chart repaint (throttled) ──────────────
+      _throttledNotify();
 
     } catch (_) {
       // Silently drop malformed packets
     }
   }
 
-  void _processPeak(DateTime peakTime) {
-    peakCount++;
-    if (_lastPeakTime != null) {
-      final rrMs = peakTime.difference(_lastPeakTime!).inMilliseconds.toDouble();
-      if (rrMs > 300 && rrMs < 2000) { // valid R-R: 30–200 BPM
-        _rrIntervals.addLast(rrMs);
-        if (_rrIntervals.length > _kHrvWindowSize) {
-          _rrIntervals.removeFirst();
-        }
-        _updateMetrics(rrMs);
-      }
-    }
-    _lastPeakTime = peakTime;
-  }
-
-  void _updateMetrics(double latestRrMs) {
-    if (_rrIntervals.isEmpty) return;
-
-    // BPM from latest R-R
-    bpm = (60000 / latestRrMs).round().clamp(20, 250);
-
-    if (_rrIntervals.length < 2) return;
-
-    final list = _rrIntervals.toList();
-    final mean = list.reduce((a, b) => a + b) / list.length;
-
-    // SDNN
-    final variance = list.map((x) => pow(x - mean, 2)).reduce((a, b) => a + b) / list.length;
-    sdnn = sqrt(variance);
-
-    // RMSSD
-    double sumSqDiff = 0;
-    for (int i = 1; i < list.length; i++) {
-      sumSqDiff += pow(list[i] - list[i - 1], 2);
-    }
-    rmssd = sqrt(sumSqDiff / (list.length - 1));
-  }
+  // HRV metrics (SDNN, RMSSD) are now computed on-device by the firmware
+  // and sent directly in the BLE JSON — no local computation needed.
 
   // ── Backend POST (batched, fire-and-forget) ─────────────────────────────
   void _flushPostQueue() {
@@ -439,7 +437,7 @@ class EcgProvider extends ChangeNotifier {
       }
 
       aiAvailable = true;
-      scheduleMicrotask(() => notifyListeners());
+      _throttledNotify();
     } catch (_) {
       // Silently drop malformed AI packets
     }
@@ -487,15 +485,31 @@ class EcgProvider extends ChangeNotifier {
     isRecording = false;
     recordingFilename = "";
     aiAvailable = false;
+    isDisconnecting = false;
     bleState = BleConnectionState.disconnected;
     bleStatusMessage = "Disconnected. Tap to reconnect.";
     notifyListeners();
   }
 
   Future<void> disconnect() async {
-    await _device?.disconnect();
+    if (isDisconnecting) return; // guard against double-tap
+    isDisconnecting = true;
+    _polling = false; // stop polling immediately
+    
+    // Optimistically update the UI to instantly show disconnected
+    bleState = BleConnectionState.disconnected;
+    bleStatusMessage = "Disconnecting...";
+    notifyListeners();
+    
+    try {
+      if (_device != null) {
+        await _device!.disconnect();
+      }
+    } catch (_) {}
+    
     _handleDisconnect();
   }
+
 
   @override
   void dispose() {

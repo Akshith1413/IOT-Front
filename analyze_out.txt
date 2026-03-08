@@ -1,0 +1,26 @@
+﻿Analyzing lib...
+
+  error - screens\ecg_dashboard_screen.dart:201:29 - The method '_buildFAB' isn't defined for the type '_EcgDashboardScreenState'. Try correcting the name to the name of an existing method, or defining a method named '_buildFAB'. - undefined_method
+warning - providers\ecg_provider.dart:14:14 - The declaration '_kStatusCharUuid' isn't referenced. Try removing the declaration of '_kStatusCharUuid'. - unused_element
+warning - providers\ecg_provider.dart:19:14 - The declaration '_kHrvWindowSize' isn't referenced. Try removing the declaration of '_kHrvWindowSize'. - unused_element
+warning - screens\ecg_dashboard_screen.dart:1323:16 - The declaration '_loadCsv' isn't referenced. Try removing the declaration of '_loadCsv'. - unused_element
+   info - main.dart:47:27 - Unnecessary use of multiple underscores. Try using '_'. - unnecessary_underscores
+   info - providers\ecg_provider.dart:121:51 - Statements in an if should be enclosed in a block. Try wrapping the statement in a block. - curly_braces_in_flow_control_structures
+   info - providers\ecg_provider.dart:438:36 - Statements in a while should be enclosed in a block. Try wrapping the statement in a block. - curly_braces_in_flow_control_structures
+   info - screens\chat_screen.dart:2:8 - The import of 'dart:ui' is unnecessary because all of the used elements are also provided by the import of 'package:flutter/material.dart'. Try removing the import directive. - unnecessary_import
+   info - screens\ecg_dashboard_screen.dart:32:7 - The private field _windowSize could be 'final'. Try making the field 'final'. - prefer_final_fields
+   info - screens\ecg_dashboard_screen.dart:89:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - screens\ecg_dashboard_screen.dart:547:18 - Unnecessary braces in a string interpolation. Try removing the braces. - unnecessary_brace_in_string_interps
+   info - screens\ecg_dashboard_screen.dart:693:20 - Unnecessary use of string interpolation. Try replacing the string literal with the variable name. - unnecessary_string_interpolations
+   info - screens\ecg_dashboard_screen.dart:704:20 - Unnecessary use of string interpolation. Try replacing the string literal with the variable name. - unnecessary_string_interpolations
+   info - screens\ecg_dashboard_screen.dart:714:20 - Unnecessary use of string interpolation. Try replacing the string literal with the variable name. - unnecessary_string_interpolations
+   info - services\auth_service.dart:46:11 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - services\ecg_service.dart:31:9 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - services\ecg_service.dart:35:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - services\ecg_service.dart:58:13 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - services\ecg_service.dart:66:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - services\ecg_service.dart:89:7 - Don't invoke 'print' in production code. Try using a logging framework. - avoid_print
+   info - widgets\metrics_row.dart:69:33 - Unnecessary use of string interpolation. Try replacing the string literal with the variable name. - unnecessary_string_interpolations
+   info - widgets\metrics_row.dart:84:34 - Unnecessary use of string interpolation. Try replacing the string literal with the variable name. - unnecessary_string_interpolations
+
+22 issues found.

@@ -67,7 +67,7 @@ class _EcgPainter extends CustomPainter {
       final x = (i / (windowSize - 1)) * w;
       final y = h - ((samples[i].ecgValue - minY) / yRange) * h;
       points.add(Offset(x, y));
-      if (samples[i].status == 'peak') {
+      if (samples[i].beat == 'peak') {
         peaks.add(Offset(x, y));
       }
     }
