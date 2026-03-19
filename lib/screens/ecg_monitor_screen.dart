@@ -175,6 +175,15 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
 
                 const SizedBox(height: 12),
 
+                // ── ECG Simulation Controls ──
+                if (ecg.bleState == BleConnectionState.connected)
+                  _buildSimulationControls(ecg)
+                      .animate()
+                      .fadeIn(delay: 450.ms, duration: 500.ms)
+                      .slideY(begin: 0.1, end: 0),
+
+                const SizedBox(height: 12),
+
                 // ── Bottom action bar ──
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
@@ -449,6 +458,101 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
                 ),
               ],
             ),
+    );
+  }
+
+  // ── Simulation Controls ──
+  Widget _buildSimulationControls(EcgProvider ecg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceWhite,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: ecg.simRunning ? AppColors.mintGlow : AppColors.cardBorder.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.waves,
+                    color: ecg.simRunning ? AppColors.mintGlow : AppColors.textSecondary,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    ecg.simRunning ? "Simulation Active" : "Simulation Mode",
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              Switch(
+                value: ecg.simRunning,
+                activeColor: AppColors.mintGlow,
+                onChanged: (_) {
+                  if (ecg.simRunning) {
+                    ecg.stopSimulation();
+                  } else {
+                    ecg.startSimulation(ecg.simCondition);
+                  }
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: List.generate(5, (index) {
+                final isSelected = ecg.simCondition == index;
+                final label = ['Normal', 'SVE', 'VE', 'Fusion', 'Unknown'][index];
+                final colors = [
+                  AppColors.mintGlow,
+                  Colors.orange,
+                  AppColors.stellarRose,
+                  AppColors.plasmaViolet,
+                  AppColors.textSecondary
+                ];
+                final color = colors[index];
+                
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8.0),
+                  child: ActionChip(
+                    backgroundColor: isSelected ? color.withValues(alpha: 0.2) : Colors.transparent,
+                    side: BorderSide(color: isSelected ? color : AppColors.cardBorder.withValues(alpha: 0.3)),
+                    label: Text(
+                      label,
+                      style: TextStyle(
+                        color: isSelected ? color : AppColors.textSecondary,
+                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                        fontSize: 13,
+                      ),
+                    ),
+                    onPressed: () {
+                      if (ecg.simRunning) {
+                         // change actively running sim
+                         ecg.startSimulation(index);
+                      } else {
+                         ecg.setSimCondition(index);
+                      }
+                    },
+                  ),
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

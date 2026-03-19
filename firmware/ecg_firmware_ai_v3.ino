@@ -205,6 +205,55 @@ char recordingFilename[64];
 unsigned long recordingSampleCount = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  Simulation State
+// ═══════════════════════════════════════════════════════════════════════════════
+bool simRunning = false;
+int  simMode    = 0; // 0:Normal, 1:SVE, 2:VE, 3:Fusion, 4:Unknown
+float simPhase  = 0.0f;
+unsigned long lastSimUpdate = 0;
+
+float getSyntheticSample() {
+  float sample = 0.0f;
+  float hr = 72.0f;
+  
+  if (simMode == 1) hr = 125.0f; // SVE / Tachycardia
+  if (simMode == 3) hr = 45.0f;  // Fusion / Bradycardia
+  if (simMode == 4) hr = 80.0f + (rand() % 40 - 20); // AFib (Irregular)
+
+  float period = 128.0f * 60.0f / hr;
+  simPhase += 1.0f;
+  if (simPhase >= period) simPhase = 0;
+  
+  float t = simPhase / period;
+
+  // P wave
+  if (t > 0.0 && t < 0.1) sample += 0.15 * sin(M_PI * (t - 0.0) / 0.1);
+  
+  // QRS complex
+  if (t > 0.12 && t < 0.18) {
+    float qrsT = (t - 0.12) / 0.06;
+    if (simMode == 2) { // VE / PVC: Wide and deep
+       sample += 1.2 * sin(M_PI * qrsT) * (qrsT < 0.5 ? 1.0 : -1.5);
+    } else { // Normal/SVE: Sharp and narrow
+       sample += 1.0 * sin(M_PI * qrsT) * (qrsT < 0.5 ? 2.0 : -0.5);
+    }
+  }
+
+  // T wave
+  if (t > 0.35 && t < 0.55) {
+     float tWaveT = (t - 0.35) / 0.2;
+     sample += 0.3 * sin(M_PI * tWaveT);
+  }
+  
+  // Baseline noise for AFib
+  if (simMode == 4) {
+    sample += (rand() % 100 - 50) / 1000.0f;
+  }
+
+  return sample * 65536.0f;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  Timestamp
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -647,6 +696,21 @@ void handleBLECommand(const String& cmd) {
   } else if (cmd.startsWith("STOP")) {
     stopRecording();
 
+  } else if (cmd.startsWith("SIM_START,")) {
+    String mode = cmd.substring(10);
+    mode.trim();
+    simRunning = true;
+    if (mode == "Normal")      simMode = 0;
+    else if (mode == "Tachycardia") simMode = 1;
+    else if (mode == "PVC")         simMode = 2;
+    else if (mode == "Bradycardia") simMode = 3;
+    else if (mode == "AFib")        simMode = 4;
+    statusCharacteristic.writeValue("SIM_ON:" + mode);
+
+  } else if (cmd == "SIM_STOP") {
+    simRunning = false;
+    statusCharacteristic.writeValue("SIM_OFF");
+
   } else {
     debugPrint("Unknown command: " + cmd);
   }
@@ -905,8 +969,12 @@ void loop() {
   // ── ECG Sample Acquisition ────────────────────────────────────────────────
   int32_t rawSample = 0;
 
-  // Normal mode: read from MAX30003 hardware
-  max30003.readEcgSample(rawSample);
+  if (simRunning) {
+    rawSample = (int32_t)getSyntheticSample();
+  } else {
+    // Normal mode: read from MAX30003 hardware
+    max30003.readEcgSample(rawSample);
+  }
 
   if (rawSample != 0) {
     // ── Filtering pipeline ──────────────────────────────────────────────

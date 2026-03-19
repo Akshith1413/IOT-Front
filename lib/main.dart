@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'services/auth_service.dart';
 import 'providers/ecg_provider.dart';
+import 'providers/simulator_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 
@@ -41,6 +42,7 @@ class MyApp extends StatelessWidget {
           create: (_) => AuthService(),
         ),
         ChangeNotifierProvider(create: (_) => EcgProvider()),
+        ChangeNotifierProvider(create: (_) => SimulatorProvider()),
         StreamProvider<User?>(
           create: (context) => context.read<AuthService>().user,
           initialData: null,

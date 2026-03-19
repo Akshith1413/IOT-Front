@@ -10,8 +10,10 @@ import '../widgets/particle_background.dart';
 import '../services/auth_service.dart';
 import '../providers/ecg_provider.dart';
 import '../widgets/ecg_chart.dart';
+import '../providers/simulator_provider.dart';
 import 'ecg_monitor_screen.dart';
 import 'chat_screen.dart';
+import 'simulator_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -20,6 +22,7 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = Provider.of<User?>(context);
     final ecg = context.watch<EcgProvider>();
+    final simProvider = context.watch<SimulatorProvider>();
     final isConnected = ecg.bleState == BleConnectionState.connected;
 
     return Scaffold(
@@ -392,42 +395,33 @@ class HomeScreen extends StatelessWidget {
                     Expanded(
                       child: _buildDashboardCard(
                         context,
-                        icon: ecg.isRecording ? Icons.stop_circle_rounded : Icons.save_rounded,
-                        title: ecg.isRecording ? 'Stop Rec' : 'SD Record',
-                        subtitle: ecg.isRecording ? 'Saving to SD Card...' : 'Save raw ECG data',
-                        color: ecg.isRecording ? AppColors.stellarRose : AppColors.iceBlue,
+                        icon: Icons.biotech,
+                        title: 'ECG Simulator',
+                        subtitle: 'Test AI with synthetic signals',
+                        color: AppColors.plasmaViolet,
                         gradientColors: [
-                          ecg.isRecording 
-                              ? AppColors.stellarRose.withValues(alpha: 0.15) 
-                              : AppColors.iceBlue.withValues(alpha: 0.15),
-                          AppColors.deepSpace.withValues(alpha: 0.5),
+                          AppColors.plasmaViolet.withValues(alpha: 0.15),
+                          AppColors.nebulaIndigo.withValues(alpha: 0.7),
                         ],
                         isSmall: true,
-                        onTap: () async {
-                          if (!isConnected) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Please connect device first')),
-                            );
-                            return;
-                          }
-                          
-                          if (ecg.isRecording) {
-                            await ecg.stopSdRecording();
-                            if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Recording stopped')),
-                                );
-                            }
-                          } else {
-                            final now = DateTime.now();
-                            final timeString = "${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}";
-                            await ecg.startSdRecording("REC_$timeString.CSV");
-                            if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Started recording: REC_$timeString.CSV')),
-                                );
-                            }
-                          }
+                        trailingContent: simProvider.simRunning
+                            ? Container(
+                                width: 10,
+                                height: 10,
+                                decoration: const BoxDecoration(
+                                  color: Colors.redAccent,
+                                  shape: BoxShape.circle,
+                                ),
+                              ).animate(onPlay: (controller) => controller.repeat(reverse: true))
+                               .scale(begin: const Offset(0.9, 0.9), end: const Offset(1.2, 1.2), duration: 800.ms)
+                            : null,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const SimulatorScreen(),
+                            ),
+                          );
                         },
                       ),
                     ),
@@ -526,6 +520,7 @@ class HomeScreen extends StatelessWidget {
     required Color color,
     required List<Color> gradientColors,
     required VoidCallback onTap,
+    Widget? trailingContent,
     bool isSmall = false,
   }) {
     return Material(
@@ -561,13 +556,20 @@ class HomeScreen extends StatelessWidget {
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: color.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Icon(icon, color: color, size: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Icon(icon, color: color, size: 24),
+                          ),
+                          if (trailingContent != null) trailingContent,
+                        ],
                       ),
                       const SizedBox(height: 16),
                       Text(
