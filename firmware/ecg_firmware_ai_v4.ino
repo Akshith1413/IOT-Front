@@ -1,26 +1,34 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  ECG Firmware v3.1 — Live ECG + On-Board Simulation + AI Classification
-//  Arduino Nano 33 BLE + MAX30003 + TFLite Micro
+//  ECG Firmware v4 — Live + Simulation + Replay Mode (ESP32 Bridge)
+//  Arduino Nano 33 BLE + MAX30003 + TFLite Micro + ESP32 UART
 // ═══════════════════════════════════════════════════════════════════════════════
 //
+//  Changes from v3:
+//    • NEW: Three operating modes — Live, Simulation, Replay
+//    • NEW: UART bridge to ESP32 (Serial1: TX=1, RX=0) for sim/replay data
+//    • NEW: BLE commands for mode switching forwarded to ESP32
+//    • UNCHANGED: All signal processing (filtering, peak detection, HRV, AI)
+//    • UNCHANGED: ECG register config, BLE service UUIDs, SD card recording
+//
 //  Modes:
-//    LIVE — ECG from MAX30003 hardware sensor (default)
-//    SIM  — Synthetic ECG generated on-MCU (no ESP32 needed)
-//           Conditions: Normal (72 BPM), Tachycardia (150), Bradycardia (45),
-//                       PVC (premature beats), AFib (irregular R-R)
+//    LIVE       — ECG from MAX30003 (default, same as v3)
+//    SIMULATION — ECG from ESP32 synthetic generator
+//    REPLAY     — ECG from ESP32 dataset streamer
 //
-//  BLE Commands:
-//    SIM_START,<0-4>  — Start simulation (0=Normal,1=Tachy,2=Brady,3=PVC,4=AFib)
-//    SIM_STOP         — Stop simulation, return to live
-//    START,<filename> — Start SD recording
-//    STOP             — Stop SD recording
+//  In Simulation/Replay modes, the Nano receives "ECG:<value>" lines from the
+//  ESP32 over Serial1 and feeds them into the SAME processing pipeline
+//  (median filter → moving average → baseline removal → peak detection → AI).
 //
-//  The simulated signal goes through the SAME pipeline as live ECG:
-//    median filter → moving avg → baseline removal → peak detection → AI
+//  BLE Commands (new):
+//    MODE_LIVE           — Switch to live MAX30003 mode
+//    MODE_SIM,<class>    — Switch to simulation mode for class (N/S/V/F/Q)
+//    MODE_REPLAY,<id>    — Switch to replay mode for dataset <id>
+//    SIM_STOP            — Stop simulation, return to live
+//    REPLAY_STOP         — Stop replay, return to live
+//    REPLAY_LIST         — Request dataset list from ESP32
+//    PING_ESP            — Ping ESP32 for connectivity check
 //
-//  AI Classes (MIT-BIH standard):
-//    0 = N  (Normal)  1 = S  (Supraventricular)  2 = V  (Ventricular)
-//    3 = F  (Fusion)  4 = Q  (Unknown)
+//  All existing commands (START,<filename>, STOP) still work unchanged.
 //
 //  Model input:  [1, 1, 256] — 256 samples at 128 Hz (~2 seconds)
 //  Model output: [1, 5]      — logits for each class
@@ -49,8 +57,35 @@ MAX30003 max30003(MAX30003_CS_PIN);
 // ─── DEBUG MODE ──────────────────────────────────────────────────────────────
 #define DEBUG_MODE false
 
+// ─── ESP32 Serial Bridge ─────────────────────────────────────────────────────
+// Nano 33 BLE Serial1: TX = Pin 1, RX = Pin 0
+// Connect: Nano TX(1) → ESP32 RX(16), Nano RX(0) → ESP32 TX(17), GND → GND
+#define ESP32_SERIAL Serial1
+#define ESP32_BAUD   115200
+
 // ═══════════════════════════════════════════════════════════════════════════════
-//  BLE Service & Characteristics
+//  Operating Mode
+// ═══════════════════════════════════════════════════════════════════════════════
+
+enum OperatingMode {
+  OP_MODE_LIVE,       // ECG from MAX30003
+  OP_MODE_SIMULATION, // ECG from ESP32 synthetic generator
+  OP_MODE_REPLAY      // ECG from ESP32 dataset replay
+};
+
+OperatingMode operatingMode = OP_MODE_LIVE;
+
+// ESP32 serial receive buffer
+String esp32RxBuffer = "";
+int32_t esp32EcgValue = 0;
+bool    esp32SampleReady = false;
+
+// Forward ESP32 status/dataset responses to Flutter via BLE
+// (stored until BLE can send)
+String esp32PendingResponse = "";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BLE Service & Characteristics (UNCHANGED UUIDs)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 BLEService ecgService("12345678-1234-1234-1234-123456789ABC");
@@ -58,13 +93,13 @@ BLEService ecgService("12345678-1234-1234-1234-123456789ABC");
 BLEStringCharacteristic ecgCharacteristic(
   "12345678-1234-1234-1234-123456789ABD",
   BLERead | BLENotify,
-  160
+  200
 );
 
 BLEStringCharacteristic statusCharacteristic(
   "12345678-1234-1234-1234-123456789ABE",
   BLERead | BLENotify,
-  32
+  128   // Increased from 32 to hold dataset lists
 );
 
 BLEStringCharacteristic commandCharacteristic(
@@ -80,7 +115,7 @@ BLEStringCharacteristic aiCharacteristic(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Signal Processing Filters
+//  Signal Processing Filters (UNCHANGED from v3)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #define FILTER_SIZE 5
@@ -96,10 +131,9 @@ int32_t baseline      = 0;
 float   baselineAlpha = 0.001;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Software Peak Detection & Heart Rate
+//  Software Peak Detection & Heart Rate (UNCHANGED from v3)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Adaptive threshold peak detection
 int32_t       peakThreshold     = 50;
 float         adaptiveMax       = 50.0f;
 float         adaptiveAlpha     = 0.01f;
@@ -108,9 +142,8 @@ float         thresholdFraction = 0.40f;
 unsigned long lastPeakTime      = 0;
 unsigned long peakInterval      = 0;
 bool          peakDetected      = false;
-bool          beatPending       = false;   // survives BLE throttle
+bool          beatPending       = false;
 
-// Heart rate with EMA smoothing
 int           heartRate       = 0;
 float         smoothedHR      = 72.0f;
 float         hrAlpha         = 0.2f;
@@ -118,23 +151,23 @@ float         hrAlpha         = 0.2f;
 #define       HR_MAX          180
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  RR Interval + HRV (SDNN / RMSSD) — with EMA smoothing
+//  RR Interval + HRV (UNCHANGED from v3)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #define RR_BUFFER_SIZE      20
-#define RR_MIN_COUNT        5      // Minimum beats before reporting HRV
-#define HRV_SMOOTH_ALPHA    0.3f   // EMA alpha for SDNN/RMSSD smoothing
+#define RR_MIN_COUNT        5
+#define HRV_SMOOTH_ALPHA    0.3f
 
 unsigned long rrBuffer[RR_BUFFER_SIZE];
 int           rrBufferIndex = 0;
 int           rrBufferCount = 0;
 
 int           lastRRms      = 0;
-float         sdnnValue     = 0.0f;   // EMA-smoothed SDNN
-float         rmssdValue    = 0.0f;   // EMA-smoothed RMSSD
-float         rawSdnn       = 0.0f;   // Raw computed SDNN (before smoothing)
-float         rawRmssd      = 0.0f;   // Raw computed RMSSD (before smoothing)
-bool          hrvReady      = false;  // True once we have enough RR intervals
+float         sdnnValue     = 0.0f;
+float         rmssdValue    = 0.0f;
+float         rawSdnn       = 0.0f;
+float         rawRmssd      = 0.0f;
+bool          hrvReady      = false;
 
 void computeHRV() {
   if (rrBufferCount < RR_MIN_COUNT) {
@@ -147,19 +180,16 @@ void computeHRV() {
   hrvReady = true;
   int n = rrBufferCount;
 
-  // Collect valid entries from circular buffer (oldest → newest)
   float intervals[RR_BUFFER_SIZE];
   for (int i = 0; i < n; i++) {
     int idx = (rrBufferIndex - n + i + RR_BUFFER_SIZE) % RR_BUFFER_SIZE;
     intervals[i] = (float)rrBuffer[idx];
   }
 
-  // Mean RR
   float mean = 0.0f;
   for (int i = 0; i < n; i++) mean += intervals[i];
   mean /= (float)n;
 
-  // SDNN = sqrt(variance of RR intervals)
   float variance = 0.0f;
   for (int i = 0; i < n; i++) {
     float diff = intervals[i] - mean;
@@ -167,7 +197,6 @@ void computeHRV() {
   }
   rawSdnn = sqrtf(variance / (float)n);
 
-  // RMSSD = sqrt(mean of squared successive differences)
   float sumSqDiff = 0.0f;
   for (int i = 1; i < n; i++) {
     float diff = intervals[i] - intervals[i - 1];
@@ -175,9 +204,7 @@ void computeHRV() {
   }
   rawRmssd = sqrtf(sumSqDiff / (float)(n - 1));
 
-  // EMA smoothing — prevents abrupt jumps
   if (sdnnValue < 0.01f && rmssdValue < 0.01f) {
-    // First time: initialize directly
     sdnnValue  = rawSdnn;
     rmssdValue = rawRmssd;
   } else {
@@ -196,142 +223,7 @@ bool bleConnected = false;
 int bleSampleCounter = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Simulation Mode  —  generate synthetic ECG on the MCU
-//  Triggered by BLE command: SIM_START,<condition> / SIM_STOP
-//  The synthetic signal goes through the FULL pipeline:
-//    filtering → peak detection → AI inference → BLE send
-// ═══════════════════════════════════════════════════════════════════════════════
-
-bool  simMode      = false;
-int   simCondition = 0;        // 0=N(Normal) 1=S(SupraVE) 2=V(VentricE) 3=F(Fusion) 4=Q(Unknown)
-float simTime      = 0.0f;
-unsigned long simStepUs = 7812; // ~128 Hz (1e6/128)
-
-// Condition names match MIT-BIH AI class labels
-static const char* SIM_CONDITION_NAMES[] = {
-  "Normal", "SupraVE", "VentricE", "Fusion", "Unknown"
-};
-
-// Simple pseudo-random noise (deterministic, no stdlib needed)
-static unsigned long simRandState = 12345;
-float simRandom() {
-  simRandState = simRandState * 1103515245 + 12345;
-  return ((float)((simRandState >> 16) & 0x7FFF) / 32767.0f) * 2.0f - 1.0f;
-}
-
-// Gaussian helper for waveform synthesis
-float simGaussian(float x, float mu, float sigma) {
-  float d = (x - mu) / sigma;
-  return expf(-0.5f * d * d);
-}
-
-// ── Normal PQRST waveform at given phase (0.0–1.0) ──
-float simNormalPQRST(float phase) {
-  float val = 0.0f;
-  if (phase >= 0.0f && phase < 0.12f)
-    val = 0.15f * simGaussian(phase, 0.06f, 0.025f);
-  else if (phase >= 0.12f && phase < 0.17f)
-    val = -0.1f * simGaussian(phase, 0.145f, 0.012f);
-  else if (phase >= 0.17f && phase < 0.24f)
-    val = 1.2f * simGaussian(phase, 0.20f, 0.014f);
-  else if (phase >= 0.24f && phase < 0.30f)
-    val = -0.2f * simGaussian(phase, 0.27f, 0.015f);
-  else if (phase >= 0.38f && phase < 0.58f)
-    val = 0.25f * simGaussian(phase, 0.48f, 0.04f);
-  return val;
-}
-
-// Generate one synthetic ECG sample targeting a specific MIT-BIH class
-int32_t generateSimSample() {
-  float val = 0.0f;
-  float dt  = (float)simStepUs / 1e6f;
-  float period = 60.0f / 72.0f; // 72 BPM base for all conditions
-  float phase  = fmodf(simTime, period) / period;
-
-  switch (simCondition) {
-
-    // ── 0: Normal (N) — Clean sinus rhythm, 72 BPM ──
-    case 0:
-    default:
-      val = simNormalPQRST(phase);
-      break;
-
-    // ── 1: Supraventricular Ectopic (S) — Early narrow-QRS beats ──
-    // Every 4th beat comes early with inverted P-wave, narrow QRS
-    case 1: {
-      int beatNum = (int)(simTime / period);
-      if (beatNum % 4 == 2) {
-        float earlyPeriod = period * 0.7f;
-        float earlyPhase  = fmodf(simTime, earlyPeriod) / earlyPeriod;
-        if (earlyPhase >= 0.0f && earlyPhase < 0.12f)
-          val = -0.12f * simGaussian(earlyPhase, 0.06f, 0.02f);
-        else if (earlyPhase >= 0.15f && earlyPhase < 0.22f)
-          val = 1.0f * simGaussian(earlyPhase, 0.18f, 0.013f);
-        else if (earlyPhase >= 0.22f && earlyPhase < 0.28f)
-          val = -0.15f * simGaussian(earlyPhase, 0.25f, 0.014f);
-        else if (earlyPhase >= 0.35f && earlyPhase < 0.55f)
-          val = 0.2f * simGaussian(earlyPhase, 0.45f, 0.04f);
-      } else {
-        val = simNormalPQRST(phase);
-      }
-      break;
-    }
-
-    // ── 2: Ventricular Ectopic (V) — Wide bizarre QRS, no P-wave ──
-    // Every 3rd beat: wide biphasic QRS, no P-wave, inverted T
-    case 2: {
-      int beatNum = (int)(simTime / period);
-      if (beatNum % 3 == 1) {
-        if (phase >= 0.12f && phase < 0.28f)
-          val = -1.2f * simGaussian(phase, 0.20f, 0.035f);
-        else if (phase >= 0.28f && phase < 0.45f)
-          val = 0.8f * simGaussian(phase, 0.36f, 0.035f);
-        else if (phase >= 0.50f && phase < 0.70f)
-          val = 0.3f * simGaussian(phase, 0.60f, 0.04f);
-      } else {
-        val = simNormalPQRST(phase);
-      }
-      break;
-    }
-
-    // ── 3: Fusion (F) — Hybrid normal + ventricular QRS ──
-    // Every 4th beat: 50% normal PQRST + 50% ventricular morphology
-    case 3: {
-      int beatNum = (int)(simTime / period);
-      if (beatNum % 4 == 2) {
-        float normalVal = simNormalPQRST(phase);
-        float ventVal   = 0.0f;
-        if (phase >= 0.14f && phase < 0.26f)
-          ventVal = -0.8f * simGaussian(phase, 0.20f, 0.03f);
-        else if (phase >= 0.26f && phase < 0.40f)
-          ventVal = 0.5f * simGaussian(phase, 0.33f, 0.03f);
-        else if (phase >= 0.45f && phase < 0.60f)
-          ventVal = 0.15f * simGaussian(phase, 0.52f, 0.035f);
-        val = 0.5f * normalVal + 0.5f * ventVal;
-      } else {
-        val = simNormalPQRST(phase);
-      }
-      break;
-    }
-
-    // ── 4: Unknown (Q) — Noisy artifact-laden signal ──
-    // Normal ECG buried under noise, baseline wander, artifact spikes
-    case 4: {
-      val = 0.4f * simNormalPQRST(phase);
-      val += 0.3f * sinf(simTime * 0.8f);        // baseline wander
-      val += 0.15f * simRandom();                  // HF noise
-      if (fmodf(simTime, 2.0f) < 0.05f)
-        val += 1.5f * simRandom();                 // artifact spikes
-      break;
-    }
-  }
-
-  simTime += dt;
-  return (int32_t)(val * 65536.0f);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  SD Card Recording State
+//  SD Card Recording State (UNCHANGED from v3)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 bool sdAvailable  = false;
@@ -347,7 +239,7 @@ unsigned long recordingSampleCount = 0;
 unsigned long bootEpochMs = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  TFLite Micro — Arrhythmia Detection Engine
+//  TFLite Micro — Arrhythmia Detection Engine (UNCHANGED from v3)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #define AI_INPUT_SIZE   256
@@ -361,7 +253,6 @@ static const char* AI_CLASS_SHORT[AI_NUM_CLASSES] = {
   "N", "S", "V", "F", "Q"
 };
 
-// Ring buffer for AI inference
 float aiInputBuffer[AI_INPUT_SIZE];
 int   aiBufferIndex = 0;
 bool  aiBufferFull  = false;
@@ -369,48 +260,24 @@ bool  aiBufferFull  = false;
 #define AI_INFERENCE_INTERVAL_MS 3000
 unsigned long lastInferenceTime = 0;
 
-// Latest AI result
 int   lastAiClass      = -1;
 float lastAiConfidence = 0.0f;
 char  lastAiLabel[16]  = "---";
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  AI Robustness: Logit Bias + Confidence Gate + Majority Voting
-// ═══════════════════════════════════════════════════════════════════════════════
-//
-//  Problem: The model was trained on MIT-BIH data (from specific ECG hardware).
-//  The MAX30003 with base_hr.ino register configuration produces a signal with
-//  different morphological characteristics. After z-score normalization, these
-//  differences cause the model to output high confidence for VentricE even on
-//  normal ECG.
-//
-//  Solution (3 layers):
-//
-//  1. LOGIT BIAS: Add +3.5 to the Normal class logit BEFORE softmax.
-//     This encodes the clinical prior that most ECG beats are normal.
-//     Effect: the model needs ~97%+ raw confidence for an abnormal class
-//     to overcome this bias. This is appropriate because genuine arrhythmias
-//     produce extremely distinctive waveform features that even cross-hardware
-//     differences cannot mask.
-//
-//  2. CONFIDENCE GATE: After bias-adjusted softmax, non-Normal classes must
-//     exceed 85% confidence. Otherwise, default to Normal.
-//
-//  3. MAJORITY VOTE: Keep last 5 classification results, report the majority.
-//     Prevents single-inference flips.
-//
+//  AI Robustness: Logit Bias + Confidence Gate + Majority Voting (UNCHANGED)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#define AI_NORMAL_LOGIT_BIAS      3.5f    // Added to Normal class logit before softmax
-#define AI_CONFIDENCE_THRESHOLD   0.85f   // Non-Normal must exceed this after bias
-#define AI_VOTE_BUFFER_SIZE       5       // Majority voting window
+#define AI_NORMAL_LOGIT_BIAS      3.5f
+#define AI_CONFIDENCE_THRESHOLD   0.85f
+#define AI_VOTE_BUFFER_SIZE       5
 
 int aiVoteBuffer[AI_VOTE_BUFFER_SIZE];
 int aiVoteIndex = 0;
 int aiVoteCount = 0;
 
 int getAiMajorityClass() {
-  if (aiVoteCount == 0) return 0;  // Default Normal
+  if (aiVoteCount == 0) return 0;
 
   int counts[AI_NUM_CLASSES] = {0};
   int n = min(aiVoteCount, AI_VOTE_BUFFER_SIZE);
@@ -442,7 +309,7 @@ tflite::MicroInterpreter* interpreter = nullptr;
 TfLiteTensor* inputTensor             = nullptr;
 TfLiteTensor* outputTensor            = nullptr;
 
-// ─── Initialize TFLite Micro ─────────────────────────────────────────────────
+// ─── Initialize TFLite Micro (UNCHANGED) ─────────────────────────────────────
 bool initTFLite() {
   tfModel = tflite::GetModel(ecg_model_float32_tflite);
   if (tfModel->version() != TFLITE_SCHEMA_VERSION) {
@@ -497,7 +364,7 @@ bool initTFLite() {
   return true;
 }
 
-// ─── Run inference with bias-corrected classification ────────────────────────
+// ─── Run inference (UNCHANGED) ───────────────────────────────────────────────
 void runInference() {
   if (interpreter == nullptr || inputTensor == nullptr || outputTensor == nullptr) return;
 
@@ -505,7 +372,7 @@ void runInference() {
   if (now - lastInferenceTime < AI_INFERENCE_INTERVAL_MS) return;
   lastInferenceTime = now;
 
-  // ── Z-score normalize (matches Python training pipeline) ──────────────
+  // Z-score normalize
   float mean = 0.0f;
   for (int i = 0; i < AI_INPUT_SIZE; i++) mean += aiInputBuffer[i];
   mean /= (float)AI_INPUT_SIZE;
@@ -521,7 +388,6 @@ void runInference() {
     inputTensor->data.f[i] = (aiInputBuffer[i] - mean) / stddev;
   }
 
-  // ── Invoke the model ──────────────────────────────────────────────────
   unsigned long inferStart = micros();
   TfLiteStatus invoke_status = interpreter->Invoke();
   unsigned long inferTime = micros() - inferStart;
@@ -531,22 +397,19 @@ void runInference() {
     return;
   }
 
-  // ── Read output logits ────────────────────────────────────────────────
   float logits[AI_NUM_CLASSES];
   for (int i = 0; i < AI_NUM_CLASSES; i++) {
     logits[i] = outputTensor->data.f[i];
   }
 
-  // ── LAYER 1: Apply logit bias to Normal class ─────────────────────────
-  // This encodes the strong clinical prior that most beats are Normal.
-  // The MAX30003 signal morphology differs from MIT-BIH training data,
-  // causing false VentricE predictions. The bias corrects this.
-  // In simulation mode, disable bias since synthetic waveforms match MIT-BIH.
-  if (!simMode) {
+  // LAYER 1: Logit bias
+  // In simulation/replay mode, disable the normal logit bias since the
+  // synthetic data matches MIT-BIH distribution (no hardware mismatch)
+  if (operatingMode == OP_MODE_LIVE) {
     logits[0] += AI_NORMAL_LOGIT_BIAS;
   }
 
-  // ── Softmax on bias-adjusted logits ───────────────────────────────────
+  // Softmax
   float maxLogit = logits[0];
   for (int i = 1; i < AI_NUM_CLASSES; i++) {
     if (logits[i] > maxLogit) maxLogit = logits[i];
@@ -565,7 +428,6 @@ void runInference() {
     if (probs[i] < 0.0f) probs[i] = 0.0f;
   }
 
-  // Find top class (from bias-adjusted probabilities)
   float maxProb = -1.0f;
   int   maxIdx  = 0;
   for (int i = 0; i < AI_NUM_CLASSES; i++) {
@@ -575,14 +437,15 @@ void runInference() {
     }
   }
 
-  // ── LAYER 2: Confidence gate — non-Normal must exceed threshold ───────
-  // In sim mode, trust the model output directly (no safety net needed)
+  // LAYER 2: Confidence gate (only in live mode)
   int reportedClass = maxIdx;
-  if (!simMode && maxIdx != 0 && maxProb < AI_CONFIDENCE_THRESHOLD) {
-    reportedClass = 0;  // Default to Normal
+  if (operatingMode == OP_MODE_LIVE) {
+    if (maxIdx != 0 && maxProb < AI_CONFIDENCE_THRESHOLD) {
+      reportedClass = 0;
+    }
   }
 
-  // ── LAYER 3: Majority voting ──────────────────────────────────────────
+  // LAYER 3: Majority voting
   aiVoteBuffer[aiVoteIndex] = reportedClass;
   aiVoteIndex = (aiVoteIndex + 1) % AI_VOTE_BUFFER_SIZE;
   if (aiVoteCount < AI_VOTE_BUFFER_SIZE) aiVoteCount++;
@@ -594,88 +457,40 @@ void runInference() {
   strncpy(lastAiLabel, AI_CLASS_SHORT[finalClass], sizeof(lastAiLabel));
 
   if (DEBUG_MODE) {
-    // Show raw (pre-bias) vs final for debugging
-    Serial.print("[AI] Raw logits: ");
-    for (int i = 0; i < AI_NUM_CLASSES; i++) {
-      Serial.print(AI_CLASS_SHORT[i]);
-      Serial.print("=");
-      Serial.print(outputTensor->data.f[i], 2);
-      Serial.print(" ");
-    }
-    Serial.println();
-
-    Serial.print("[AI] Bias-adjusted probs: ");
+    Serial.print("[AI] Probs: ");
     for (int i = 0; i < AI_NUM_CLASSES; i++) {
       Serial.print(AI_CLASS_SHORT[i]);
       Serial.print("=");
       Serial.print(probs[i] * 100.0f, 1);
       Serial.print("% ");
     }
-    Serial.println();
-
-    Serial.print("[AI] Gated→");
-    Serial.print(AI_CLASS_LABELS[reportedClass]);
-    Serial.print(" | Voted→");
-    Serial.print(AI_CLASS_LABELS[finalClass]);
-    Serial.print(" | Time:");
-    Serial.print(inferTime / 1000.0f, 1);
-    Serial.println("ms");
+    Serial.print(" → ");
+    Serial.println(AI_CLASS_LABELS[finalClass]);
   }
 
-  // ── Send AI result over BLE ───────────────────────────────────────────
+  // Send AI result over BLE
   if (bleConnected) {
+    // Include mode info in AI response — use same short code as ECG JSON
+    const char* modeCode = "L";
+    if (operatingMode == OP_MODE_SIMULATION) modeCode = "S";
+    else if (operatingMode == OP_MODE_REPLAY) modeCode = "R";
+
     char aiJson[128];
     snprintf(aiJson, sizeof(aiJson),
-      "{\"class\":\"%s\",\"label\":\"%s\",\"confidence\":%.2f,\"probs\":[%.3f,%.3f,%.3f,%.3f,%.3f]}",
+      "{\"class\":\"%s\",\"label\":\"%s\",\"confidence\":%.2f,\"probs\":[%.3f,%.3f,%.3f,%.3f,%.3f],\"m\":\"%s\"}",
       AI_CLASS_SHORT[finalClass],
       AI_CLASS_LABELS[finalClass],
       lastAiConfidence,
-      probs[0], probs[1], probs[2], probs[3], probs[4]
+      probs[0], probs[1], probs[2], probs[3], probs[4],
+      modeCode
     );
     aiCharacteristic.writeValue(aiJson);
   }
 }
 
-// ─── Simulation Mode: Start / Stop ──────────────────────────────────────────
-// (Placed here so all AI variables are in scope)
-
-void startSimMode(int condition) {
-  simCondition = constrain(condition, 0, 4);
-  simTime      = 0.0f;
-  simMode      = true;
-
-  // Reset processing state for clean start
-  for (int i = 0; i < FILTER_SIZE; i++) filterBuffer[i] = 0;
-  for (int i = 0; i < MEDIAN_SIZE; i++) medianBuffer[i] = 0;
-  for (int i = 0; i < AI_INPUT_SIZE; i++) aiInputBuffer[i] = 0.0f;
-  filterIndex = 0; medianIndex = 0; aiBufferIndex = 0; aiBufferFull = false;
-  baseline = 0; adaptiveMax = 50.0f;
-  heartRate = 0; smoothedHR = 72.0f;
-  rrBufferCount = 0; rrBufferIndex = 0;
-  sdnnValue = 0; rmssdValue = 0; hrvReady = false;
-  lastInferenceTime = millis();  // avoid immediate inference
-  aiVoteCount = 0; aiVoteIndex = 0;
-
-  Serial.print("[SIM] Started: ");
-  Serial.println(SIM_CONDITION_NAMES[simCondition]);
-  if (bleConnected) {
-    char msg[64];
-    snprintf(msg, sizeof(msg), "SIM_ON:%s", SIM_CONDITION_NAMES[simCondition]);
-    statusCharacteristic.writeValue(msg);
-  }
-}
-
-void stopSimMode() {
-  simMode = false;
-  simTime = 0.0f;
-  Serial.println("[SIM] Stopped");
-  if (bleConnected) {
-    statusCharacteristic.writeValue("SIM_OFF");
-  }
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Helper Functions
+//  Helper Functions (UNCHANGED from v3)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void millisToISO8601(unsigned long ms, char* buf, size_t bufLen) {
@@ -720,7 +535,7 @@ void debugPrint(const String& msg) {
   if (DEBUG_MODE) Serial.println(msg);
 }
 
-// ─── SD Card Helpers ─────────────────────────────────────────────────────────
+// ─── SD Card Helpers (UNCHANGED) ─────────────────────────────────────────────
 
 void initSDCard() {
   Serial.println("[SD] Initializing SD card...");
@@ -756,7 +571,7 @@ void startRecording(const char* filename) {
 
   if (dataFile) {
     digitalWrite(MAX30003_CS_PIN, HIGH);
-    dataFile.println("timestamp,ecg_raw,ecg_filtered,ecg_mv,heart_rate,rr_ms,beat,sdnn,rmssd,ai_class,ai_confidence");
+    dataFile.println("timestamp,ecg_raw,ecg_filtered,ecg_mv,heart_rate,rr_ms,beat,sdnn,rmssd,ai_class,ai_confidence,mode");
     dataFile.flush();
     digitalWrite(MAX30003_CS_PIN, LOW);
 
@@ -789,12 +604,16 @@ void writeToSD(const char* timestamp, int32_t rawValue, int32_t filtered,
                float ecgMv, int hr, int rrMs, const char* beat) {
   if (!isRecording) return;
 
+  const char* modeStr = "live";
+  if (operatingMode == OP_MODE_SIMULATION) modeStr = "sim";
+  else if (operatingMode == OP_MODE_REPLAY) modeStr = "replay";
+
   digitalWrite(MAX30003_CS_PIN, HIGH);
 
-  char line[200];
-  snprintf(line, sizeof(line), "%s,%ld,%ld,%.6f,%d,%d,%s,%.1f,%.1f,%s,%.2f",
+  char line[220];
+  snprintf(line, sizeof(line), "%s,%ld,%ld,%.6f,%d,%d,%s,%.1f,%.1f,%s,%.2f,%s",
     timestamp, (long)rawValue, (long)filtered, ecgMv, hr, rrMs, beat,
-    sdnnValue, rmssdValue, lastAiLabel, lastAiConfidence);
+    sdnnValue, rmssdValue, lastAiLabel, lastAiConfidence, modeStr);
   dataFile.println(line);
 
   recordingSampleCount++;
@@ -806,27 +625,152 @@ void writeToSD(const char* timestamp, int32_t rawValue, int32_t filtered,
   digitalWrite(MAX30003_CS_PIN, LOW);
 }
 
-// ─── BLE Command Handler ─────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ESP32 Serial Communication
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Send a command to the ESP32
+void sendToESP32(const String& cmd) {
+  ESP32_SERIAL.println(cmd);
+  if (DEBUG_MODE) {
+    Serial.println("[BRIDGE] Sent to ESP32: " + cmd);
+  }
+}
+
+// Process incoming data from ESP32
+void processESP32Data(const String& line) {
+  if (line.startsWith("ECG:")) {
+    // ECG sample from ESP32
+    String valueStr = line.substring(4);
+    esp32EcgValue = valueStr.toInt();
+    esp32SampleReady = true;
+    
+  } else if (line.startsWith("STATUS:")) {
+    // Status response from ESP32 — forward to Flutter via BLE
+    String status = line.substring(7);
+    if (bleConnected) {
+      statusCharacteristic.writeValue(status.c_str());
+    }
+    if (DEBUG_MODE) {
+      Serial.println("[BRIDGE] ESP32 status: " + status);
+    }
+    
+  } else if (line.startsWith("DATASETS:")) {
+    // Dataset list from ESP32 — forward to Flutter via BLE
+    String datasets = line.substring(9);
+    if (bleConnected) {
+      statusCharacteristic.writeValue(("DATASETS:" + datasets).c_str());
+    }
+    if (DEBUG_MODE) {
+      Serial.println("[BRIDGE] ESP32 datasets: " + datasets);
+    }
+    
+  } else if (line == "PONG") {
+    if (bleConnected) {
+      statusCharacteristic.writeValue("ESP32_OK");
+    }
+    if (DEBUG_MODE) {
+      Serial.println("[BRIDGE] ESP32 PONG received");
+    }
+  }
+}
+
+// Read from ESP32 serial (non-blocking, line-delimited)
+void readESP32Serial() {
+  while (ESP32_SERIAL.available()) {
+    char c = ESP32_SERIAL.read();
+    if (c == '\n' || c == '\r') {
+      if (esp32RxBuffer.length() > 0) {
+        processESP32Data(esp32RxBuffer);
+        esp32RxBuffer = "";
+      }
+    } else {
+      esp32RxBuffer += c;
+      if (esp32RxBuffer.length() > 256) {
+        esp32RxBuffer = "";  // Overflow protection
+      }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Mode Switching — Reset pipeline state for clean transitions
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void resetPipelineState() {
+  // Reset filters
+  for (int i = 0; i < FILTER_SIZE; i++) filterBuffer[i] = 0;
+  for (int i = 0; i < MEDIAN_SIZE; i++) medianBuffer[i] = 0;
+  filterIndex = 0;
+  medianIndex = 0;
+  baseline = 0;
+  
+  // Reset peak detection
+  peakThreshold = 50;
+  adaptiveMax = 50.0f;
+  lastPeakTime = 0;
+  peakInterval = 0;
+  peakDetected = false;
+  beatPending = false;
+  heartRate = 0;
+  smoothedHR = 72.0f;
+  
+  // Reset HRV
+  for (int i = 0; i < RR_BUFFER_SIZE; i++) rrBuffer[i] = 0;
+  rrBufferIndex = 0;
+  rrBufferCount = 0;
+  lastRRms = 0;
+  sdnnValue = 0.0f;
+  rmssdValue = 0.0f;
+  hrvReady = false;
+  
+  // Reset AI
+  for (int i = 0; i < AI_INPUT_SIZE; i++) aiInputBuffer[i] = 0.0f;
+  aiBufferIndex = 0;
+  aiBufferFull = false;
+  lastInferenceTime = 0;
+  for (int i = 0; i < AI_VOTE_BUFFER_SIZE; i++) aiVoteBuffer[i] = 0;
+  aiVoteIndex = 0;
+  aiVoteCount = 0;
+  lastAiClass = -1;
+  lastAiConfidence = 0.0f;
+  strncpy(lastAiLabel, "---", sizeof(lastAiLabel));
+}
+
+void switchToMode(OperatingMode newMode) {
+  if (newMode == operatingMode) return;
+  
+  // Stop any previous ESP32 activity
+  if (operatingMode == OP_MODE_SIMULATION) {
+    sendToESP32("SIM_STOP");
+  } else if (operatingMode == OP_MODE_REPLAY) {
+    sendToESP32("REPLAY_STOP");
+  }
+  
+  operatingMode = newMode;
+  resetPipelineState();
+  esp32SampleReady = false;
+  
+  const char* modeStr = "LIVE";
+  if (newMode == OP_MODE_SIMULATION) modeStr = "SIMULATION";
+  else if (newMode == OP_MODE_REPLAY) modeStr = "REPLAY";
+  
+  if (bleConnected) {
+    char modeMsg[32];
+    snprintf(modeMsg, sizeof(modeMsg), "MODE_%s", modeStr);
+    statusCharacteristic.writeValue(modeMsg);
+  }
+  
+  Serial.print("[MODE] Switched to: ");
+  Serial.println(modeStr);
+}
+
+// ─── BLE Command Handler (EXTENDED) ─────────────────────────────────────────
 void handleBLECommand(const String& cmd) {
   debugPrint("BLE Command: " + cmd);
 
-  if (cmd.startsWith("SIM_START,")) {
-    // Simulation mode: SIM_START,<0-4> or SIM_START,<class_name>
-    String param = cmd.substring(10);
-    param.trim();
-    int cond = 0;
-    if (param == "Normal" || param == "N" || param == "0")      cond = 0;
-    else if (param == "SupraVE" || param == "S" || param == "1") cond = 1;
-    else if (param == "VentricE" || param == "V" || param == "2") cond = 2;
-    else if (param == "Fusion" || param == "F" || param == "3")  cond = 3;
-    else if (param == "Unknown" || param == "Q" || param == "4") cond = 4;
-    else                                                         cond = param.toInt();
-    startSimMode(cond);
-
-  } else if (cmd.startsWith("SIM_STOP")) {
-    stopSimMode();
-
-  } else if (cmd.startsWith("START,")) {
+  // ── Existing commands ──
+  if (cmd.startsWith("START,")) {
     String filename = cmd.substring(6);
     filename.trim();
     if (filename.length() == 0) filename = "ecg_data";
@@ -840,13 +784,45 @@ void handleBLECommand(const String& cmd) {
   } else if (cmd.startsWith("STOP")) {
     stopRecording();
 
+  // ── NEW: Mode switching commands ──
+  } else if (cmd == "MODE_LIVE") {
+    switchToMode(OP_MODE_LIVE);
+    
+  } else if (cmd.startsWith("MODE_SIM,")) {
+    String classStr = cmd.substring(9);
+    classStr.trim();
+    switchToMode(OP_MODE_SIMULATION);
+    // Forward to ESP32
+    sendToESP32("SIM_START," + classStr);
+    
+  } else if (cmd.startsWith("MODE_REPLAY,")) {
+    String idStr = cmd.substring(12);
+    idStr.trim();
+    switchToMode(OP_MODE_REPLAY);
+    // Forward to ESP32
+    sendToESP32("REPLAY_START," + idStr);
+    
+  } else if (cmd == "SIM_STOP") {
+    sendToESP32("SIM_STOP");
+    switchToMode(OP_MODE_LIVE);
+    
+  } else if (cmd == "REPLAY_STOP") {
+    sendToESP32("REPLAY_STOP");
+    switchToMode(OP_MODE_LIVE);
+    
+  } else if (cmd == "REPLAY_LIST") {
+    sendToESP32("REPLAY_LIST");
+    
+  } else if (cmd == "PING_ESP") {
+    sendToESP32("PING");
+
   } else {
     debugPrint("Unknown command: " + cmd);
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Signal Processing
+//  Signal Processing (UNCHANGED from v3)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 int32_t medianFilter(int32_t newValue) {
@@ -877,13 +853,12 @@ int32_t movingAverage(int32_t newValue) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Software Peak Detection — Adaptive Threshold + EMA Smoothed HR
+//  Software Peak Detection (UNCHANGED from v3)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void detectPeak(int32_t value) {
   unsigned long now = millis();
 
-  // Track running max of absolute filtered signal for adaptive threshold
   float absVal = (float)abs(value);
   if (absVal > adaptiveMax) {
     adaptiveMax = absVal;
@@ -891,15 +866,12 @@ void detectPeak(int32_t value) {
     adaptiveMax = adaptiveMax * (1.0f - adaptiveAlpha) + absVal * adaptiveAlpha;
   }
 
-  // Adaptive threshold: fraction of running max (floor of 30)
   peakThreshold = (int32_t)(adaptiveMax * thresholdFraction);
   if (peakThreshold < 30) peakThreshold = 30;
 
-  // Detect rising edge crossing threshold
   if (value > peakThreshold && !peakDetected) {
     unsigned long elapsed = now - lastPeakTime;
 
-    // Refractory period: ≥300 ms between peaks (max 200 BPM)
     if (elapsed > 300) {
       peakInterval = elapsed;
       lastPeakTime = now;
@@ -907,36 +879,30 @@ void detectPeak(int32_t value) {
       if (peakInterval > 0) {
         int rawHR = 60000 / (int)peakInterval;
 
-        // Only accept physiologically valid HR
         if (rawHR >= HR_MIN && rawHR <= HR_MAX) {
-          // EMA smoothing to prevent spikes
           smoothedHR = smoothedHR * (1.0f - hrAlpha) + (float)rawHR * hrAlpha;
           heartRate = (int)(smoothedHR + 0.5f);
 
-          // Store RR interval for HRV
           lastRRms = (int)peakInterval;
           rrBuffer[rrBufferIndex] = peakInterval;
           rrBufferIndex = (rrBufferIndex + 1) % RR_BUFFER_SIZE;
           if (rrBufferCount < RR_BUFFER_SIZE) rrBufferCount++;
 
-          // Recompute HRV metrics (with EMA smoothing inside)
           computeHRV();
         }
-        // Out-of-range HR is silently ignored — heartRate keeps previous value
       }
     }
     peakDetected = true;
-    beatPending  = true;   // Survives BLE throttling
+    beatPending  = true;
   }
 
-  // Reset when signal drops below half threshold
   if (value < peakThreshold / 2) {
     peakDetected = false;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Send ECG data as JSON over BLE
+//  Send ECG data as JSON over BLE (EXTENDED with mode field)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void sendECGoverBLE(int32_t filteredValue, const char* timestamp, const char* beat) {
@@ -944,16 +910,20 @@ void sendECGoverBLE(int32_t filteredValue, const char* timestamp, const char* be
   if (ecgFloat >  3.0f) ecgFloat =  3.0f;
   if (ecgFloat < -3.0f) ecgFloat = -3.0f;
 
-  // Only send non-zero HRV values once we have enough data
   float sendSdnn  = hrvReady ? sdnnValue  : 0.0f;
   float sendRmssd = hrvReady ? rmssdValue : 0.0f;
 
-  // Include sim flag (0 or 1) so Flutter knows the data source.
-  // All keys kept short to stay within 128-byte BLE characteristic limit.
-  char jsonBuffer[160];
+  // Mode short code: "L" = live, "S" = simulation, "R" = replay
+  const char* modeCode = "L";
+  if (operatingMode == OP_MODE_SIMULATION) modeCode = "S";
+  else if (operatingMode == OP_MODE_REPLAY) modeCode = "R";
+
+  // NOTE: Total payload MUST stay under 200 bytes (BLE characteristic limit).
+  // Shortened keys: ts=timestamp, v=ecg_value, b=beat, m=mode
+  char jsonBuffer[200];
   snprintf(jsonBuffer, sizeof(jsonBuffer),
-    "{\"timestamp\":\"%s\",\"ecg_value\":%.6f,\"beat\":\"%s\",\"hr\":%d,\"rr\":%d,\"sdnn\":%.1f,\"rmssd\":%.1f,\"sim\":%d}",
-    timestamp, ecgFloat, beat, heartRate, lastRRms, sendSdnn, sendRmssd, simMode ? 1 : 0
+    "{\"ts\":\"%s\",\"v\":%.6f,\"b\":\"%s\",\"hr\":%d,\"rr\":%d,\"sdnn\":%.1f,\"rmssd\":%.1f,\"m\":\"%s\"}",
+    timestamp, ecgFloat, beat, heartRate, lastRRms, sendSdnn, sendRmssd, modeCode
   );
 
   ecgCharacteristic.writeValue(jsonBuffer);
@@ -967,14 +937,18 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
+  // ── ESP32 Serial Init ─────────────────────────────────────────────────────
+  ESP32_SERIAL.begin(ESP32_BAUD);
+  Serial.println("[BRIDGE] ESP32 Serial1 initialized at 115200 baud");
+
   pinMode(MAX30003_CS_PIN, OUTPUT);
   pinMode(SD_CS_PIN, OUTPUT);
   digitalWrite(MAX30003_CS_PIN, HIGH);
   digitalWrite(SD_CS_PIN, HIGH);
 
   debugPrint("==========================================");
-  debugPrint("  MAX30003 ECG + Software HR + AI v3");
-  debugPrint("  Arduino Nano 33 BLE");
+  debugPrint("  MAX30003 ECG + Software HR + AI v4");
+  debugPrint("  Arduino Nano 33 BLE + ESP32 Bridge");
   debugPrint("==========================================");
 
   // ── BLE Init ──────────────────────────────────────────────────────────────
@@ -1022,10 +996,7 @@ void setup() {
   Serial.println("Initialising the chip ...");
   max30003.begin();
 
-  // ── ECG register config (same as base_hr.ino — DO NOT CHANGE) ─────────
-  // These are the register values that produce a good ECG signal on the
-  // current hardware. The AI model compensates for any morphological
-  // differences via the logit bias above.
+  // ── ECG register config (UNCHANGED) ───────────────────────────────────────
   max30003.writeRegister(REG_CNFG_GEN,   0x080004);
   max30003.writeRegister(REG_CNFG_CAL,   0x720000);
   max30003.writeRegister(REG_CNFG_EMUX,  0x0B0000);
@@ -1043,9 +1014,6 @@ void setup() {
     debugPrint("[AI] WARNING: AI model failed to load! Running without AI.");
   } else {
     debugPrint("[AI] Model loaded. Ready for inference.");
-    debugPrint("[AI] Normal logit bias: +" + String(AI_NORMAL_LOGIT_BIAS, 1));
-    debugPrint("[AI] Confidence threshold: " + String(AI_CONFIDENCE_THRESHOLD * 100, 0) + "%");
-    debugPrint("[AI] Voting window: " + String(AI_VOTE_BUFFER_SIZE));
   }
 
   // ── Init all buffers ──────────────────────────────────────────────────────
@@ -1055,7 +1023,10 @@ void setup() {
   for (int i = 0; i < RR_BUFFER_SIZE; i++) rrBuffer[i] = 0;
   for (int i = 0; i < AI_VOTE_BUFFER_SIZE; i++) aiVoteBuffer[i] = 0;
 
-  debugPrint("Ready! ECG + Software HR + AI streaming...");
+  debugPrint("Ready! ECG + Software HR + AI + ESP32 Bridge streaming...");
+
+  // ── Ping ESP32 on startup ─────────────────────────────────────────────────
+  sendToESP32("PING");
 
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
@@ -1068,6 +1039,9 @@ void setup() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 void loop() {
+  // ── Always read ESP32 serial (non-blocking) ───────────────────────────────
+  readESP32Serial();
+
   // ── Poll BLE ──────────────────────────────────────────────────────────────
   BLEDevice central = BLE.central();
 
@@ -1085,9 +1059,9 @@ void loop() {
       stopRecording();
       debugPrint("Auto-stopped recording due to disconnect.");
     }
-    if (simMode) {
-      stopSimMode();
-      debugPrint("Auto-stopped simulation due to disconnect.");
+    // Return to live mode on disconnect
+    if (operatingMode != OP_MODE_LIVE) {
+      switchToMode(OP_MODE_LIVE);
     }
     statusCharacteristic.writeValue("DISCONNECTED");
   }
@@ -1101,18 +1075,31 @@ void loop() {
     }
   }
 
-  // ── ECG Sample Acquisition ────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  ECG Sample Acquisition — Mode-dependent source
+  // ═══════════════════════════════════════════════════════════════════════════
   int32_t rawSample = 0;
+  bool    sampleAvailable = false;
 
-  if (simMode) {
-    // In simulation mode: generate synthetic ECG on the MCU
-    rawSample = generateSimSample();
-  } else {
-    // Normal mode: read from MAX30003 hardware
+  if (operatingMode == OP_MODE_LIVE) {
+    // ── LIVE MODE: Read from MAX30003 ──
     max30003.readEcgSample(rawSample);
+    sampleAvailable = (rawSample != 0);
+    
+  } else {
+    // ── SIMULATION / REPLAY MODE: Read from ESP32 serial ──
+    if (esp32SampleReady) {
+      rawSample = esp32EcgValue;
+      esp32SampleReady = false;
+      sampleAvailable = true;
+    }
   }
 
-  if (rawSample != 0 || simMode) {
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  UNIFIED Processing Pipeline (UNCHANGED — same for all modes)
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  if (sampleAvailable) {
     // ── Filtering pipeline ──────────────────────────────────────────────
     int32_t medianFiltered = medianFilter(rawSample);
     int32_t smoothed       = movingAverage(medianFiltered);
@@ -1135,17 +1122,13 @@ void loop() {
 
     // ── Serial output ───────────────────────────────────────────────────
     if (DEBUG_MODE) {
-      Serial.print(simMode ? "[SIM] " : "");
       Serial.print("ECG:");
       Serial.print(filtered);
       Serial.print(",HR:");
       Serial.print(heartRate);
-      Serial.print(",SDNN:");
-      Serial.print(sdnnValue, 1);
-      Serial.print(",RMSSD:");
-      Serial.print(rmssdValue, 1);
-      Serial.print(",AI:");
-      Serial.println(lastAiLabel);
+      Serial.print(",Mode:");
+      Serial.println(operatingMode == OP_MODE_LIVE ? "LIVE" : 
+                     operatingMode == OP_MODE_SIMULATION ? "SIM" : "REPLAY");
     } else {
       Serial.println(filtered);
     }
@@ -1154,8 +1137,6 @@ void loop() {
     char tsBuffer[32];
     millisToISO8601(millis(), tsBuffer, sizeof(tsBuffer));
 
-    // beatPending survives BLE throttling — ensures the frontend
-    // receives the "peak" marker even if it wasn't the throttle window
     const char* beatFlag = beatPending ? "peak" : "normal";
 
     // ── SD Card recording ───────────────────────────────────────────────
@@ -1164,14 +1145,13 @@ void loop() {
       writeToSD(tsBuffer, rawSample, filtered, ecgMv, heartRate, lastRRms, beatFlag);
     }
 
-    // ── BLE send (throttled, only when connected) ───────────────────────
+    // ── BLE send (throttled) ────────────────────────────────────────────
     if (bleConnected) {
       bleSampleCounter++;
       if (bleSampleCounter >= BLE_SEND_EVERY_N_SAMPLES) {
         bleSampleCounter = 0;
         sendECGoverBLE(filtered, tsBuffer, beatFlag);
 
-        // Clear beat pending ONLY after successful BLE send
         beatPending = false;
       }
     } else {
@@ -1179,5 +1159,12 @@ void loop() {
     }
   }
 
-  delay(8); // ~128 SPS
+  // ── Delay based on mode ───────────────────────────────────────────────────
+  if (operatingMode == OP_MODE_LIVE) {
+    delay(8); // ~128 SPS for MAX30003
+  } else {
+    // In sim/replay mode, the ESP32 sends at 128 Hz.
+    // We just need to keep polling fast enough to not miss samples.
+    delay(1);
+  }
 }
