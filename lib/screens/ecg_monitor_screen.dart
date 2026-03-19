@@ -9,7 +9,6 @@ import '../providers/ecg_provider.dart';
 import '../widgets/ecg_chart.dart';
 import '../widgets/ble_status_bar.dart';
 import '../widgets/metrics_row.dart';
-import '../widgets/simulator_panel.dart';
 import 'chat_screen.dart';
 
 class EcgMonitorScreen extends StatefulWidget {
@@ -104,9 +103,7 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              ecg.isSimulating && ecg.activeSimCondition >= 0
-                                  ? "128 SPS · Sim (${simConditions[ecg.activeSimCondition].name})"
-                                  : "128 SPS · Live MAX30003",
+                              "128 SPS · Real-time",
                               style: TextStyle(
                                 fontSize: 12,
                                 color: AppColors.textSecondary.withValues(alpha: 0.6),
@@ -125,7 +122,7 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
 
                 // ── ECG Chart ──
                 Expanded(
-                  flex: 4,
+                  flex: 5,
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(24),
                     child: BackdropFilter(
@@ -162,135 +159,113 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
                   ),
                 ),
 
+                const SizedBox(height: 16),
+
+                // ── Metrics ──
+                const MetricsRow()
+                    .animate()
+                    .fadeIn(delay: 300.ms, duration: 500.ms)
+                    .slideY(begin: 0.1, end: 0),
+
                 const SizedBox(height: 12),
 
-                // ── Scrollable bottom section ──
-                Expanded(
-                  flex: 3,
-                  child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // ── Metrics ──
-                        const MetricsRow()
-                            .animate()
-                            .fadeIn(delay: 300.ms, duration: 500.ms)
-                            .slideY(begin: 0.1, end: 0),
+                // ── AI Classification Card ──
+                if (ecg.bleState == BleConnectionState.connected)
+                  _buildAiCard(ecg)
+                      .animate()
+                      .fadeIn(delay: 400.ms, duration: 500.ms)
+                      .slideY(begin: 0.1, end: 0),
 
-                        const SizedBox(height: 12),
+                const SizedBox(height: 12),
 
-                        // ── Simulator Control Panel ──
-                        if (ecg.bleState == BleConnectionState.connected)
-                          SimulatorPanel(ecg: ecg)
-                              .animate()
-                              .fadeIn(delay: 350.ms, duration: 500.ms)
-                              .slideY(begin: 0.1, end: 0),
+                // ── Bottom action bar ──
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _InfoChip(
+                        icon: Icons.bolt_rounded,
+                        label: "Peaks: ${ecg.peakCount}",
+                        color: AppColors.cosmicGold,
+                      ),
+                      const SizedBox(width: 8),
 
-                        if (ecg.bleState == BleConnectionState.connected)
-                          const SizedBox(height: 12),
 
-                        // ── AI Classification Card ──
-                        if (ecg.bleState == BleConnectionState.connected)
-                          _buildAiCard(ecg)
-                              .animate()
-                              .fadeIn(delay: 400.ms, duration: 500.ms)
-                              .slideY(begin: 0.1, end: 0),
 
-                        const SizedBox(height: 12),
-
-                        // ── Bottom action bar ──
-                        SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: [
-                              _InfoChip(
-                                icon: Icons.bolt_rounded,
-                                label: "Peaks: ${ecg.peakCount}",
-                                color: AppColors.cosmicGold,
+                      // ── Chat button ──
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(14),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const ChatScreen(),
                               ),
-                              const SizedBox(width: 8),
+                            );
+                          },
+                          child: const _InfoChip(
+                            icon: Icons.chat_bubble_rounded,
+                            label: "Heart Chat",
+                            color: AppColors.iceBlue,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
 
-                              // ── Chat button ──
-                              Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(14),
-                                  onTap: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => const ChatScreen(),
-                                      ),
-                                    );
-                                  },
-                                  child: const _InfoChip(
-                                    icon: Icons.chat_bubble_rounded,
-                                    label: "Heart Chat",
-                                    color: AppColors.iceBlue,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-
-                              // ── Record button ──
-                              if (ecg.bleState == BleConnectionState.connected)
-                                Material(
-                                  color: Colors.transparent,
-                                  child: InkWell(
-                                    borderRadius: BorderRadius.circular(14),
-                                    onTap: ecg.isStoppingRecording
-                                        ? null
-                                        : () async {
-                                      if (ecg.isRecording) {
-                                        await ecg.stopSdRecording();
-                                      } else {
-                                        _showRecordDialog(context, ecg);
-                                      }
-                                    },
-                                    child: _InfoChip(
-                                      icon: ecg.isRecording
-                                          ? Icons.stop_circle_rounded
-                                          : Icons.fiber_manual_record_rounded,
-                                      label: ecg.isRecording
-                                          ? "Stop (${ecg.recordingFilename})"
-                                          : "Record",
-                                      color: ecg.isRecording
-                                          ? AppColors.stellarRose
-                                          : AppColors.iceBlue,
-                                    ),
-                                  ),
-                                ),
-
-                              const SizedBox(width: 8),
-
-                              // ── Disconnect button ──
-                              if (ecg.bleState == BleConnectionState.connected)
-                                Material(
-                                  color: Colors.transparent,
-                                  child: InkWell(
-                                    borderRadius: BorderRadius.circular(14),
-                                    onTap: ecg.isDisconnecting
-                                        ? null
-                                        : () => ecg.disconnect(),
-                                    child: _InfoChip(
-                                      icon: ecg.isDisconnecting
-                                          ? Icons.hourglass_top_rounded
-                                          : Icons.bluetooth_disabled,
-                                      label: ecg.isDisconnecting
-                                          ? "Disconnecting..."
-                                          : "Disconnect",
-                                      color: AppColors.stellarRose,
-                                    ),
-                                  ),
-                                ),
-                            ],
+                      // ── Record button ──
+                      if (ecg.bleState == BleConnectionState.connected)
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: ecg.isStoppingRecording
+                                ? null
+                                : () async {
+                              if (ecg.isRecording) {
+                                await ecg.stopSdRecording();
+                              } else {
+                                _showRecordDialog(context, ecg);
+                              }
+                            },
+                            child: _InfoChip(
+                              icon: ecg.isRecording
+                                  ? Icons.stop_circle_rounded
+                                  : Icons.fiber_manual_record_rounded,
+                              label: ecg.isRecording
+                                  ? "Stop (${ecg.recordingFilename})"
+                                  : "Record",
+                              color: ecg.isRecording
+                                  ? AppColors.stellarRose
+                                  : AppColors.iceBlue,
+                            ),
                           ),
                         ),
 
-                        const SizedBox(height: 8),
-                      ],
-                    ),
+                      const SizedBox(width: 8),
+
+                      // ── Disconnect button (fixed with InkWell + guard) ──
+                      if (ecg.bleState == BleConnectionState.connected)
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: ecg.isDisconnecting
+                                ? null
+                                : () => ecg.disconnect(),
+                            child: _InfoChip(
+                              icon: ecg.isDisconnecting
+                                  ? Icons.hourglass_top_rounded
+                                  : Icons.bluetooth_disabled,
+                              label: ecg.isDisconnecting
+                                  ? "Disconnecting..."
+                                  : "Disconnect",
+                              color: AppColors.stellarRose,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],
