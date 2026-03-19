@@ -29,6 +29,19 @@ class EcgProvider extends ChangeNotifier {
   StreamSubscription<BluetoothConnectionState>? _connStateSub;
   StreamSubscription<List<ScanResult>>? _scanSub;
 
+  // ── Live stream control / recovery ─────────────────────────────────────
+  bool _livePaused = false;
+  bool _usingPolling = false;
+  DateTime _lastEcgPacketAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _ecgWatchdog;
+  static const Duration _kFreezeTimeout = Duration(seconds: 4);
+
+  // ── Auto-reconnect ──────────────────────────────────────────────────────
+  bool _userInitiatedDisconnect = false;
+  Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
+  static const int _kMaxReconnectAttempt = 6;
+
   BleConnectionState bleState = BleConnectionState.disconnected;
   String bleStatusMessage = "Not connected";
 
@@ -52,6 +65,7 @@ class EcgProvider extends ChangeNotifier {
   // ── SD Recording state ─────────────────────────────────────────────────
   bool   isRecording     = false;
   String recordingFilename = "";
+  bool   isStoppingRecording = false;
 
   // ── Disconnect guard ────────────────────────────────────────────────────
   bool isDisconnecting = false;
@@ -79,6 +93,7 @@ class EcgProvider extends ChangeNotifier {
       });
     }
   }
+
 
   // ── R-R interval tracking (firmware computes HRV, we just receive) ─────
 
@@ -116,7 +131,9 @@ class EcgProvider extends ChangeNotifier {
 
   Future<void> startScan() async {
     if (bleState == BleConnectionState.scanning ||
-        bleState == BleConnectionState.connected) return;
+        bleState == BleConnectionState.connected) {
+      return;
+    }
 
     bleState = BleConnectionState.scanning;
     bleStatusMessage = "Scanning for ECG_Nano33...";
@@ -155,15 +172,16 @@ class EcgProvider extends ChangeNotifier {
 
   Future<void> _connectToDevice(BluetoothDevice device) async {
     _device = device;
+    _userInitiatedDisconnect = false;
     bleState = BleConnectionState.connecting;
-    bleStatusMessage = "Connecting to ECG_Nano33...";
+    bleStatusMessage = "Connecting…";
     notifyListeners();
 
     try {
       await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
     } catch (e) {
       bleState = BleConnectionState.error;
-      bleStatusMessage = "Connection failed: $e";
+      bleStatusMessage = "Couldn’t connect. Tap to retry.";
       notifyListeners();
       return;
     }
@@ -177,11 +195,15 @@ class EcgProvider extends ChangeNotifier {
     });
 
     await _discoverAndSubscribe(device);
+
+    // connection completed
   }
 
+  
+
   Future<void> _discoverAndSubscribe(BluetoothDevice device) async {
-    bleStatusMessage = "Discovering services...";
-    notifyListeners();
+    // Keep showing the generic connecting message while discovering
+    bleStatusMessage = "Connecting...";
 
     List<BluetoothService> services;
     try {
@@ -190,8 +212,9 @@ class EcgProvider extends ChangeNotifier {
           .timeout(const Duration(seconds: 15));
     } catch (e) {
       bleState = BleConnectionState.error;
-      bleStatusMessage = "Discovery failed/timed out: $e";
+      bleStatusMessage = "Connection lost. Reconnecting…";
       notifyListeners();
+      _scheduleReconnect();
       return;
     }
 
@@ -202,20 +225,18 @@ class EcgProvider extends ChangeNotifier {
       return;
     }
 
-    // DEBUG: print found services to console/status
-    bleStatusMessage = "Found ${services.length} services...";
-    notifyListeners();
-    await Future.delayed(const Duration(milliseconds: 500)); // Brief pause for user to see
+    // DEBUG: print found services to console
+    debugPrint("Found ${services.length} services...");
+    await Future.delayed(const Duration(milliseconds: 500)); // Brief pause
 
     for (final service in services) {
-      bleStatusMessage = "Checking service: ${service.uuid.toString().substring(0, 8)}...";
-      notifyListeners();
+      debugPrint("Checking service: ${service.uuid.toString().substring(0, 8)}...");
       await Future.delayed(const Duration(milliseconds: 300)); // Visual delay
 
       if (service.uuid.toString().toUpperCase() ==
           _kServiceUuid.toUpperCase()) {
-        bleStatusMessage = "Service matched! Checking chars...";
-        notifyListeners();
+        debugPrint("Service matched! Checking chars...");
+        
 
         for (final char in service.characteristics) {
           if (char.uuid.toString().toUpperCase() ==
@@ -235,12 +256,16 @@ class EcgProvider extends ChangeNotifier {
         }
 
         if (_ecgChar != null) {
-            bleStatusMessage = "Chars found! Setting up...";
-            notifyListeners();
+            debugPrint("Chars found! Setting up...");
 
             // ── Step 1: Set up the data listener FIRST ─────────────────
             _notifySub?.cancel();
-            _notifySub = _ecgChar!.onValueReceived.listen(_onEcgData);
+            _notifySub = _ecgChar!.onValueReceived.listen(
+              _onEcgData,
+              onError: (_) => _scheduleEcgRecovery(),
+              onDone: _scheduleEcgRecovery,
+              cancelOnError: false,
+            );
 
             // ── Step 2: Try to enable notifications ────────────────────
             bool notificationsWorking = false;
@@ -274,12 +299,19 @@ class EcgProvider extends ChangeNotifier {
             // ── Step 3: Mark as connected ──────────────────────────────
             bleState = BleConnectionState.connected;
             bleStatusMessage = "Live — ECG_Nano33";
+            _reconnectAttempt = 0;
             notifyListeners();
 
             // ── Step 4: If notifications didn't work, start polling ────
             if (!notificationsWorking) {
+              debugPrint("Falling back to polling");
+              _usingPolling = true;
               _startPolling(_ecgChar!);
+            } else {
+              _usingPolling = false;
             }
+
+            _startEcgWatchdog();
             return;
         }
       }
@@ -288,9 +320,8 @@ class EcgProvider extends ChangeNotifier {
 
 
     bleState = BleConnectionState.error;
-    // Show first found service UUID as hint if mismatch
-    final hint = services.isNotEmpty ? services.first.uuid.toString().substring(0, 8) : "None";
-    bleStatusMessage = "ECG Svc/Char not found. Found: $hint...";
+    // Show a minimal error message if services/characteristics weren't found
+    bleStatusMessage = "Device services not found";
     notifyListeners();
   }
 
@@ -326,42 +357,131 @@ class EcgProvider extends ChangeNotifier {
   double? _lastRawValue;      // Previous raw value for interpolation
   static const int _interpPoints = 2;  // Light interpolation (Catmull-Rom handles smoothness)
 
+  // ── RX framing (newline-delimited JSON) ────────────────────────────────
+  final List<int> _ecgRxBuffer = <int>[];
+  int _consecutiveEcgParseFailures = 0;
+  static const int _kMaxRxBufferBytes = 16 * 1024;
+
   // ── Called for every BLE notification or poll read ─────────────────────
   void _onEcgData(List<int> bytes) {
+    // Many BLE stacks can split/merge packets. Parse a rolling byte buffer
+    // and extract full JSON objects either newline-delimited or concatenated.
+    if (bytes.isEmpty) return;
+    _ecgRxBuffer.addAll(bytes);
+    if (_ecgRxBuffer.length > _kMaxRxBufferBytes) {
+      _ecgRxBuffer.clear();
+      _consecutiveEcgParseFailures++;
+      if (_consecutiveEcgParseFailures >= 5) {
+        _scheduleEcgRecovery();
+      }
+      return;
+    }
+
+    while (true) {
+      // Drop any leading noise before a JSON object starts.
+      final start = _ecgRxBuffer.indexOf(123); // '{'
+      if (start == -1) {
+        // No JSON start found; keep buffer small.
+        if (_ecgRxBuffer.length > 1024) _ecgRxBuffer.clear();
+        break;
+      }
+      if (start > 0) {
+        _ecgRxBuffer.removeRange(0, start);
+      }
+
+      // Fast path: newline-delimited JSON.
+      final nl = _ecgRxBuffer.indexOf(10); // '\n'
+      if (nl != -1) {
+        final frameBytes = _ecgRxBuffer.sublist(0, nl);
+        _ecgRxBuffer.removeRange(0, nl + 1);
+        _tryProcessEcgFrame(frameBytes);
+        continue;
+      }
+
+      // Delimiter-free path: scan for a complete JSON object by brace matching.
+      int depth = 0;
+      bool inString = false;
+      bool escape = false;
+      int end = -1;
+      for (int i = 0; i < _ecgRxBuffer.length; i++) {
+        final b = _ecgRxBuffer[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (b == 92) { // '\'
+          if (inString) escape = true;
+          continue;
+        }
+        if (b == 34) { // '"'
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+
+        if (b == 123) {
+          depth++;
+        } else if (b == 125) {
+          depth--;
+          if (depth == 0) {
+            end = i;
+            break;
+          }
+        }
+      }
+
+      if (end == -1) {
+        // No full object yet; wait for more bytes.
+        break;
+      }
+
+      final frameBytes = _ecgRxBuffer.sublist(0, end + 1);
+      _ecgRxBuffer.removeRange(0, end + 1);
+      _tryProcessEcgFrame(frameBytes);
+    }
+  }
+
+  void _tryProcessEcgFrame(List<int> frameBytes) {
     try {
-      final jsonStr = utf8.decode(bytes).trim();
+      final jsonStr = utf8.decode(frameBytes, allowMalformed: true).trim();
       if (jsonStr.isEmpty) return;
-      final map    = json.decode(jsonStr) as Map<String, dynamic>;
+
+      final map = json.decode(jsonStr) as Map<String, dynamic>;
       final sample = EcgSample.fromJson(map);
+      _consecutiveEcgParseFailures = 0;
+      _lastEcgPacketAt = DateTime.now();
 
       final rawVal = sample.ecgValue;
 
       // ── Interpolation: insert points between samples for density ───────
       // NO smoothing applied — preserves sharp QRS peaks
       // Catmull-Rom spline in chart handles visual smoothness
-      if (_lastRawValue != null && (_lastRawValue! - rawVal).abs() > 0.0001) {
-        for (int j = 1; j <= _interpPoints; j++) {
-          final t = j / (_interpPoints + 1);
-          final interpVal = _lastRawValue! + (rawVal - _lastRawValue!) * t;
+      // Only update the live waveform while NOT recording to avoid chart activity
+      if (!isRecording) {
+        if (_lastRawValue != null && (_lastRawValue! - rawVal).abs() > 0.0001) {
+          for (int j = 1; j <= _interpPoints; j++) {
+            final t = j / (_interpPoints + 1);
+            final interpVal = _lastRawValue! + (rawVal - _lastRawValue!) * t;
 
-          final interpSample = EcgSample(
-            timestamp: sample.timestamp,
-            ecgValue: interpVal,
-            beat: 'normal',
-          );
-          chartBuffer.addLast(interpSample);
-          if (chartBuffer.length > _kMaxChartPoints) {
-            chartBuffer.removeFirst();
+            final interpSample = EcgSample(
+              timestamp: sample.timestamp,
+              ecgValue: interpVal,
+              beat: 'normal',
+            );
+            chartBuffer.addLast(interpSample);
+            if (chartBuffer.length > _kMaxChartPoints) {
+              chartBuffer.removeFirst();
+            }
           }
         }
+        // 1. Update waveform chart buffer (raw value, no smoothing)
+        chartBuffer.addLast(sample);
+        if (chartBuffer.length > _kMaxChartPoints) {
+          chartBuffer.removeFirst();
+        }
       }
+      // Keep last raw value up-to-date for interpolation when charting resumes
       _lastRawValue = rawVal;
-
-      // 1. Update waveform chart buffer (raw value, no smoothing)
-      chartBuffer.addLast(sample);
-      if (chartBuffer.length > _kMaxChartPoints) {
-        chartBuffer.removeFirst();
-      }
 
       // 2. Update HR from firmware (software peak detection with EMA)
       if (sample.heartRate > 0) {
@@ -385,9 +505,11 @@ class EcgProvider extends ChangeNotifier {
 
       // ── Notify listeners for chart repaint (throttled) ──────────────
       _throttledNotify();
-
     } catch (_) {
-      // Silently drop malformed packets
+      _consecutiveEcgParseFailures++;
+      if (_consecutiveEcgParseFailures >= 5) {
+        _scheduleEcgRecovery();
+      }
     }
   }
 
@@ -433,7 +555,9 @@ class EcgProvider extends ChangeNotifier {
         final probList = map['probs'] as List<dynamic>;
         aiProbs = probList.map((p) => (p as num).toDouble()).toList();
         // Pad to 5 if needed
-        while (aiProbs.length < 5) aiProbs.add(0.0);
+        while (aiProbs.length < 5) {
+          aiProbs.add(0.0);
+        }
       }
 
       aiAvailable = true;
@@ -451,49 +575,207 @@ class EcgProvider extends ChangeNotifier {
       return;
     }
     final cmd = "START,$filename";
+    // Optimistically set recording state so UI can update immediately
+    isRecording = true;
+    recordingFilename = filename;
+    isStoppingRecording = false;
+    notifyListeners();
     try {
+      // Send START first; pausing notifications before this can block START.
       await _commandChar!.write(utf8.encode(cmd), withoutResponse: true);
-      isRecording = true;
-      recordingFilename = filename;
-      notifyListeners();
+
+      // Now pause the live stream so recording can run without streaming load.
+      // If this fails, recording should still continue.
+      await pauseLiveEcg();
     } catch (e) {
+      // Roll back UI state if the command fails
       debugPrint("Failed to send START command: $e");
+      isRecording = false;
+      recordingFilename = "";
+      await resumeLiveEcg();
+      notifyListeners();
     }
   }
 
   Future<void> stopSdRecording() async {
     if (_commandChar == null) return;
+    if (isStoppingRecording) return;
+    isStoppingRecording = true;
+    notifyListeners();
+
+    // Optimistically update UI so a single tap feels responsive.
+    // We'll still try to deliver STOP reliably below.
+    isRecording = false;
+    recordingFilename = "";
+
     try {
-      await _commandChar!.write(utf8.encode("STOP"), withoutResponse: true);
-      isRecording = false;
-      recordingFilename = "";
-      notifyListeners();
+      Object? lastErr;
+      for (int attempt = 0; attempt < 3; attempt++) {
+        try {
+          await _commandChar!.write(utf8.encode("STOP"), withoutResponse: true);
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          await Future.delayed(Duration(milliseconds: 120 * (attempt + 1)));
+        }
+      }
+      if (lastErr != null) {
+        debugPrint("Failed to send STOP command after retries: $lastErr");
+      }
     } catch (e) {
       debugPrint("Failed to send STOP command: $e");
+    } finally {
+      // Always attempt to resume live ECG after a stop attempt.
+      await resumeLiveEcg();
+      isStoppingRecording = false;
+      notifyListeners();
     }
+  }
+
+  Future<void> pauseLiveEcg() async {
+    if (_livePaused) return;
+    if (bleState != BleConnectionState.connected) return;
+    _livePaused = true;
+    _polling = false;
+    _usingPolling = false;
+
+    try {
+      await _ecgChar?.setNotifyValue(false);
+    } catch (_) {}
+
+    await _notifySub?.cancel();
+    _notifySub = null;
+    _throttledNotify();
+  }
+
+  Future<void> resumeLiveEcg() async {
+    if (!_livePaused) return;
+    if (bleState != BleConnectionState.connected) {
+      _livePaused = false;
+      return;
+    }
+    _livePaused = false;
+
+    if (_ecgChar == null) return;
+
+    _notifySub?.cancel();
+    _notifySub = _ecgChar!.onValueReceived.listen(
+      _onEcgData,
+      onError: (_) => _scheduleEcgRecovery(),
+      onDone: _scheduleEcgRecovery,
+      cancelOnError: false,
+    );
+
+    bool notificationsWorking = false;
+    try {
+      await _ecgChar!.setNotifyValue(true).timeout(const Duration(seconds: 6));
+      notificationsWorking = true;
+    } catch (_) {}
+
+    if (!notificationsWorking) {
+      _usingPolling = true;
+      _startPolling(_ecgChar!);
+    } else {
+      _usingPolling = false;
+    }
+
+    _startEcgWatchdog();
+    _throttledNotify();
+  }
+
+  void _startEcgWatchdog() {
+    _ecgWatchdog?.cancel();
+    _ecgWatchdog = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (bleState != BleConnectionState.connected) return;
+      if (_livePaused || isRecording) return;
+
+      final age = DateTime.now().difference(_lastEcgPacketAt);
+      if (age >= _kFreezeTimeout) {
+        _scheduleEcgRecovery();
+      }
+    });
+  }
+
+  bool _recovering = false;
+  void _scheduleEcgRecovery() {
+    if (_recovering) return;
+    if (bleState != BleConnectionState.connected) return;
+    if (_livePaused || isRecording) return;
+    _recovering = true;
+
+    Future<void>(() async {
+      try {
+        if (_ecgChar == null) return;
+
+        // If we were polling, restart polling; otherwise, re-enable notify.
+        if (_usingPolling) {
+          _polling = false;
+          await Future.delayed(const Duration(milliseconds: 50));
+          _startPolling(_ecgChar!);
+        } else {
+          try {
+            await _ecgChar!.setNotifyValue(false);
+          } catch (_) {}
+          _notifySub?.cancel();
+          _notifySub = _ecgChar!.onValueReceived.listen(
+            _onEcgData,
+            onError: (_) => _scheduleEcgRecovery(),
+            onDone: _scheduleEcgRecovery,
+            cancelOnError: false,
+          );
+          try {
+            await _ecgChar!.setNotifyValue(true)
+                .timeout(const Duration(seconds: 6));
+          } catch (_) {
+            _usingPolling = true;
+            _startPolling(_ecgChar!);
+          }
+        }
+      } finally {
+        _lastEcgPacketAt = DateTime.now();
+        _recovering = false;
+      }
+    });
   }
 
   void _handleDisconnect() {
     _notifySub?.cancel();
     _aiNotifySub?.cancel();
     _connStateSub?.cancel();
+    _ecgWatchdog?.cancel();
     _polling = false;
-    _device = null;
+    _ecgRxBuffer.clear();
+    _consecutiveEcgParseFailures = 0;
+    // Keep `_device` reference for auto-reconnect attempts.
     _ecgChar = null;
     _commandChar = null;
     _aiChar = null;
     isRecording = false;
     recordingFilename = "";
+    isStoppingRecording = false;
     aiAvailable = false;
     isDisconnecting = false;
+    _livePaused = false;
+    _usingPolling = false;
+    _recovering = false;
     bleState = BleConnectionState.disconnected;
-    bleStatusMessage = "Disconnected. Tap to reconnect.";
+    bleStatusMessage = _userInitiatedDisconnect
+        ? "Disconnected"
+        : "Disconnected. Reconnecting…";
     notifyListeners();
+
+    if (!_userInitiatedDisconnect) {
+      _scheduleReconnect();
+    }
   }
 
   Future<void> disconnect() async {
     if (isDisconnecting) return; // guard against double-tap
     isDisconnecting = true;
+    _userInitiatedDisconnect = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _polling = false; // stop polling immediately
     
     // Optimistically update the UI to instantly show disconnected
@@ -510,6 +792,44 @@ class EcgProvider extends ChangeNotifier {
     _handleDisconnect();
   }
 
+  void _scheduleReconnect() {
+    if (bleState == BleConnectionState.connected ||
+        bleState == BleConnectionState.scanning ||
+        bleState == BleConnectionState.connecting) {
+      return;
+    }
+    if (_userInitiatedDisconnect) return;
+    if (_reconnectAttempt >= _kMaxReconnectAttempt) {
+      bleStatusMessage = "Disconnected. Tap to reconnect.";
+      notifyListeners();
+      return;
+    }
+
+    _reconnectTimer?.cancel();
+    final backoffMs = (500 * (1 << _reconnectAttempt)).clamp(500, 8000);
+    _reconnectTimer = Timer(Duration(milliseconds: backoffMs), () async {
+      if (_userInitiatedDisconnect) return;
+      _reconnectAttempt++;
+
+      // Prefer reconnecting to the last known device if we have it.
+      final dev = _device;
+      if (dev != null) {
+        try {
+          bleState = BleConnectionState.connecting;
+          bleStatusMessage = "Reconnecting…";
+          notifyListeners();
+          await dev.connect(autoConnect: false, timeout: const Duration(seconds: 10));
+          await _discoverAndSubscribe(dev);
+          return;
+        } catch (_) {
+          // fall through to scanning
+        }
+      }
+
+      await startScan();
+    });
+  }
+
 
   @override
   void dispose() {
@@ -518,6 +838,8 @@ class EcgProvider extends ChangeNotifier {
     _connStateSub?.cancel();
     _scanSub?.cancel();
     _postTimer?.cancel();
+    _ecgWatchdog?.cancel();
+    _reconnectTimer?.cancel();
     _polling = false;
     _device?.disconnect();
     super.dispose();

@@ -27,7 +27,10 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
       statusBarIconBrightness: Brightness.light,
     ));
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<EcgProvider>().requestPermissionsAndScan();
+      final ecg = context.read<EcgProvider>();
+      if (ecg.bleState != BleConnectionState.connected) {
+        ecg.requestPermissionsAndScan();
+      }
     });
   }
 
@@ -217,9 +220,11 @@ class _EcgMonitorScreenState extends State<EcgMonitorScreen> {
                           color: Colors.transparent,
                           child: InkWell(
                             borderRadius: BorderRadius.circular(14),
-                            onTap: () {
+                            onTap: ecg.isStoppingRecording
+                                ? null
+                                : () async {
                               if (ecg.isRecording) {
-                                ecg.stopSdRecording();
+                                await ecg.stopSdRecording();
                               } else {
                                 _showRecordDialog(context, ecg);
                               }
